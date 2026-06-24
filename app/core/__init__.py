@@ -1,0 +1,1 @@
+"""Cekirdek is mantigi modulleri."""

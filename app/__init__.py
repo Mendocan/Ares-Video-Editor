@@ -1,0 +1,1 @@
+"""Altyazi renklendirme uygulamasi paketi."""

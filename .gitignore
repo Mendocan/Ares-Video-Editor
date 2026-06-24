@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+*.egg
+
+# Build / packaging
+build/
+*.spec.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursor/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Project output & temp
+output/*
+!output/README.md
+samples/*
+!samples/README.md
+
+# Local / reference extracts
+.movavi_extract/
+
+# Secrets
+.env
+.env.*
+*.key
+
+# Whisper / model caches (large)
+models/
+.cache/
+
+# Logs
+*.log
