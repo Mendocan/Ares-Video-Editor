@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.subtitle_parser import SubtitleEntry, parse_timecode
-from app.core.word_timing import TimedSubtitle, TimedWord, build_word_timings
+from app.core.word_timing import (
+    TimedSubtitle,
+    TimedWord,
+    _ensure_first_word_capitalized,
+    build_word_timings,
+)
 
 
 WORD_TIMING_VERSION = 1
@@ -117,6 +122,7 @@ def build_timed_subtitles(
             timed.extend(build_word_timings([entry]))
             continue
 
+        timed_words = _ensure_first_word_capitalized(timed_words)
         timed.append(TimedSubtitle(entry=entry, words=timed_words))
 
     return timed

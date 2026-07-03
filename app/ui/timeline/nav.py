@@ -6,6 +6,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLabel, QScrollArea, QWidget, QSizePolicy
 
+from app.core.timeline import TRACK_AUDIO, TRACK_VIDEO
 from app.ui.timeline.theme import C_BORDER, C_PLAYHEAD, C_TEXT, C_TEXT_LT, TRACK_COLORS, TRACK_LABELS
 
 class TrackHeader(QWidget):

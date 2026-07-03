@@ -5,7 +5,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QSize, QUrl
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -15,17 +14,16 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
 import qtawesome as qta
 
 from app.core.subtitle_positions import preview_padding, qt_preview_alignment
-from app.core.word_timing import find_active_word_index, find_subtitle_at_time
+from app.core.word_timing import TimedSubtitle, find_active_word_index, find_subtitle_at_time
 from app.ui.aspect_ratio_frame import AspectRatioFrame
 from app.ui.preview_settings_dialog import PreviewSettingsDialog
-from app.ui.preview_widgets import AudioVisualizer, COLOR_PLAY_TEAL
+from app.ui.preview_widgets import AudioVisualizer, COLOR_PLAY_TEAL, PreviewVideoHost
 
 
 class MainWindowPreviewMixin:
@@ -80,24 +78,19 @@ class MainWindowPreviewMixin:
         self.preview_surface.setStyleSheet(
             "#previewSurface { background-color: #000000; border-radius: 8px; border: 1px solid #1E293B; }"
         )
-        self.aspect_frame.content_layout().addWidget(self.preview_surface, 1)
+        surface_layout = QVBoxLayout(self.preview_surface)
+        surface_layout.setContentsMargins(0, 0, 0, 0)
+        surface_layout.setSpacing(0)
 
-        preview_stack = QStackedLayout(self.preview_surface)
-        preview_stack.setStackingMode(QStackedLayout.StackAll)
+        self.preview_video_host = PreviewVideoHost(self.preview_surface)
+        self.preview_video_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        surface_layout.addWidget(self.preview_video_host)
 
-        self.video_widget = QVideoWidget()
-        self.video_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        if hasattr(self.video_widget, "setAspectRatioMode"):
-            self.video_widget.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.video_widget = self.preview_video_host.video_output
         self.media_player.setVideoOutput(self.video_widget)
+        self.subtitle_preview = self.preview_video_host.subtitle_preview
 
-        self.subtitle_preview = QLabel()
-        self.subtitle_preview.setAlignment(Qt.AlignCenter | Qt.AlignBottom)
-        self.subtitle_preview.setWordWrap(True)
-        self.subtitle_preview.setStyleSheet("background-color: transparent;")
-        
-        preview_stack.addWidget(self.subtitle_preview) # Top
-        preview_stack.addWidget(self.video_widget)     # Bottom
+        self.aspect_frame.content_layout().addWidget(self.preview_surface, 1)
 
         # ── Transport Bar ─────────────────────────────────────────────────────
         transport_widget = QWidget()
@@ -341,7 +334,16 @@ class MainWindowPreviewMixin:
         active_index = find_active_word_index(subtitle, self.current_time_ms)
 
         self.subtitle_preview.setAlignment(qt_preview_alignment(position))
-        self.subtitle_preview.setText(self._build_preview_markup(subtitle, active_index))
+        markup = self._build_preview_markup(subtitle, active_index)
+        if self.subtitle_preview.text() != markup:
+            self.subtitle_preview.setText(markup)
+        else:
+            self.subtitle_preview.setText("")
+            self.subtitle_preview.setText(markup)
+        if hasattr(self, "preview_video_host"):
+            self.preview_video_host.update_subtitle_position(position)
+            self.preview_video_host.subtitle_proxy.update()
+        self.subtitle_preview.update()
         self.subtitle_preview.setStyleSheet(
             "QLabel {"
             f"font-family: '{font_name}';"
@@ -355,8 +357,11 @@ class MainWindowPreviewMixin:
         )
         self.timeline_label.setText(self._format_ms(self.current_time_ms))
 
-    def _build_preview_markup(self, subtitle, active_index: int | None) -> str:
-        if subtitle and subtitle.words:
+    def _build_preview_markup(self, subtitle: TimedSubtitle | None, active_index: int | None) -> str:
+        if subtitle is None:
+            return ""
+
+        if subtitle.words:
             parts = []
             for word in subtitle.words:
                 color = self.active_color.name() if word.index == active_index else self.normal_color.name()
@@ -366,11 +371,19 @@ class MainWindowPreviewMixin:
                 )
             return " ".join(parts)
 
+        size = self.font_size_spin.value() if hasattr(self, "font_size_spin") else 32
         return (
-            f'<span style="color:{self.normal_color.name()};">Bugün </span>'
-            f'<span style="color:{self.active_color.name()}; font-weight:700;">aktif</span>'
-            f'<span style="color:{self.normal_color.name()};"> kelime vurgulanıyor.</span>'
+            f'<span style="color:{self.normal_color.name()}; font-size:{size}px;">'
+            f"{escape(subtitle.text)}</span>"
         )
+
+    def _on_media_position_changed(self, position: int) -> None:
+        if self.media_player.playbackState() != QMediaPlayer.PlayingState:
+            return
+        self._last_playback_pos_ms = position
+        self.current_time_ms = position
+        self.timeline_panel.set_playhead(position, emit=False)
+        self._refresh_preview()
 
     def _build_subtitle_info(self, subtitle, active_index: int | None) -> str:
         if subtitle is None:
@@ -393,6 +406,7 @@ class MainWindowPreviewMixin:
 
     def _on_timeline_playhead(self, value: int) -> None:
         self.current_time_ms = value
+        self._last_playback_pos_ms = value
         if not self.media_player.source().isEmpty():
             self.media_player.setPosition(value)
         self._refresh_preview()
@@ -414,6 +428,7 @@ class MainWindowPreviewMixin:
     def _stop_preview(self) -> None:
         self.media_player.stop()
         self.preview_timer.stop()
+        self._last_playback_pos_ms = None
         self.visualizer.update_wave(False)
         self._set_playback_icon("play")
         self._seek_playhead(0)
@@ -443,6 +458,13 @@ class MainWindowPreviewMixin:
     def _advance_preview(self) -> None:
         if not self.media_player.source().isEmpty():
             pos = self.media_player.position()
+            if self.media_player.playbackState() == QMediaPlayer.PlayingState:
+                last_pos = getattr(self, "_last_playback_pos_ms", None)
+                if last_pos is not None and pos <= last_pos:
+                    rate = self.media_player.playbackRate()
+                    step = int(self.preview_timer.interval() * rate)
+                    pos = min(self._playback_max_ms(), self.current_time_ms + max(step, 1))
+                self._last_playback_pos_ms = pos
             self.current_time_ms = pos
             self.timeline_panel.set_playhead(pos, emit=False)
             

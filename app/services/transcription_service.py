@@ -13,6 +13,7 @@ from app.core.word_timing_data import (
     save_word_timing_document,
     word_timing_path_for_srt,
 )
+from app.core.subtitle_text import capitalize_subtitle_text, capitalize_word_start
 
 
 @dataclass(slots=True)
@@ -75,7 +76,7 @@ class TranscriptionService:
             for index, segment in enumerate(segments, start=1):
                 start_time = self._format_timestamp(segment.start)
                 end_time = self._format_timestamp(segment.end)
-                text = segment.text.strip()
+                text = capitalize_subtitle_text(segment.text.strip())
 
                 handle.write(f"{index}\n")
                 handle.write(f"{start_time} --> {end_time}\n")
@@ -94,6 +95,8 @@ class TranscriptionService:
                                 "end_ms": self._seconds_to_ms(word.end),
                             }
                         )
+                if words:
+                    words[0]["text"] = capitalize_word_start(str(words[0]["text"]))
 
                 timing_segments.append(
                     WordTimingSegment(

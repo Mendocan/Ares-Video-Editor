@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
+from app.core.subtitle_text import capitalize_subtitle_text
+
 
 TIMECODE_RE = re.compile(
     r"(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2},\d{3})"
@@ -22,6 +24,11 @@ class SubtitleEntry:
     @property
     def duration_ms(self) -> int:
         return max(0, self.end_ms - self.start_ms)
+
+    def __post_init__(self) -> None:
+        normalized = capitalize_subtitle_text(self.text)
+        if normalized != self.text:
+            object.__setattr__(self, "text", normalized)
 
 
 def parse_timecode(value: str) -> int:

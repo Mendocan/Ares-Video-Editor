@@ -1,16 +1,41 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+import re
 import subprocess
+import threading
 
-from app.core.animation_presets import ANIMATION_NONE, build_active_word_tags
 from app.core.clip_effects import ClipEffects, build_segment_filter
+from app.core.font_resolver import prepare_export_fonts
+from app.core.ffmpeg_paths import ensure_ffmpeg_on_path, ffmpeg_missing_message, is_nvenc_available
+from app.core.media_probe import probe_duration_ms
 from app.core.subtitle_positions import ass_style_values
+from app.core.subtitle_style import (
+    LOGO_OVERLAY_POSITIONS,
+    ass_filter_value,
+    export_style_from_preview,
+)
 from app.core.video_presets import build_ffmpeg_video_filter, play_resolution
-from app.core.word_timing import TimedSubtitle
-from app.core.ffmpeg_paths import ensure_ffmpeg_on_path, ffmpeg_missing_message
+from app.core.word_timing import TimedSubtitle, ensure_subtitle_words
+
+_OUT_TIME_RE = re.compile(
+    r"out_time=(?P<hours>\d+):(?P<minutes>\d+):(?P<seconds>\d+)\.(?P<micro>\d+)"
+)
+
+
+def _parse_progress_time_ms(line: str) -> int | None:
+    if not line.startswith("out_time="):
+        return None
+    match = _OUT_TIME_RE.match(line.strip())
+    if not match:
+        return None
+    hours = int(match.group("hours"))
+    minutes = int(match.group("minutes"))
+    seconds = int(match.group("seconds"))
+    micro = int(match.group("micro")[:6].ljust(6, "0"))
+    return hours * 3_600_000 + minutes * 60_000 + seconds * 1_000 + micro // 1000
 
 
 @dataclass(slots=True)
@@ -39,6 +64,7 @@ class ExportRequest:
     video_crf: int = 23
     video_preset: str = "fast"
     video_segments: list[tuple[str, int, int, ClipEffects]] = field(default_factory=list)
+    preview_height_px: int = 0
 
 
 class ExportService:
@@ -58,6 +84,7 @@ class ExportService:
         work_dir: Path,
         is_preview: bool = False,
         preview_time_sec: float = 0,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> tuple[str, bool]:
         """
         Timeline segmentlerinden birleşik video hazırlar.
@@ -85,6 +112,13 @@ class ExportService:
         part_paths: list[str] = []
 
         for i, (path, start_ms, end_ms, effects) in enumerate(segments):
+            if progress_callback and len(segments) > 1:
+                pct = 8 + int((i / len(segments)) * 3)
+                self._notify(
+                    progress_callback,
+                    pct,
+                    f"Video segmenti hazirlaniyor ({i + 1}/{len(segments)})...",
+                )
             part = temp_dir / f"part_{i:03d}.mp4"
             self._cut_segment(path, start_ms, end_ms, part, effects)
             part_paths.append(str(part))
@@ -160,6 +194,8 @@ class ExportService:
         video_input: str,
         is_preview: bool = False,
         preview_time_sec: float = 0,
+        fonts_dir: Path | None = None,
+        ffmpeg_cwd: Path | None = None,
     ) -> list[str]:
         command = ["ffmpeg", "-y"]
 
@@ -169,22 +205,21 @@ class ExportService:
         command.extend(["-i", video_input])
 
         fmt_filter = build_ffmpeg_video_filter(request.aspect_ratio)
+        ass_filter = (
+            ass_filter_value(ass_path, fonts_dir, ffmpeg_cwd)
+            if ass_path is not None
+            else None
+        )
 
         if request.logo_path and Path(request.logo_path).exists():
             command.extend(["-i", request.logo_path])
-            
-            pos_map = {
-                "Sol Ust": "10:10",
-                "Sag Ust": "W-w-10:10",
-                "Sol Alt": "10:H-h-10",
-                "Sag Alt": "W-w-10:H-h-10"
-            }
-            overlay = pos_map.get(request.logo_pos, "W-w-10:10")
 
-            if ass_path is not None:
+            overlay = LOGO_OVERLAY_POSITIONS.get(request.logo_pos, "W-w-10:10")
+
+            if ass_filter is not None:
                 filter_str = (
                     f"[1:v]scale={request.logo_size}:-1[logo_scaled];"
-                    f"[0:v]ass=filename='{ass_path.name}'[v_ass];"
+                    f"[0:v]{ass_filter}[v_ass];"
                     f"[v_ass][logo_scaled]overlay={overlay}[out_v]"
                 )
             else:
@@ -203,8 +238,8 @@ class ExportService:
             command.extend(["-filter_complex", filter_str, "-map", "[out_v]"])
             if not is_preview:
                 command.extend(["-map", "0:a?"])
-        elif ass_path is not None:
-            vf_str = f"ass=filename='{ass_path.name}'"
+        elif ass_filter is not None:
+            vf_str = ass_filter
             if fmt_filter:
                 vf_str += f",{fmt_filter}"
             command.extend(["-vf", vf_str])
@@ -235,8 +270,10 @@ class ExportService:
             if request.audio_bitrate != "Orijinal":
                 command.extend(["-b:a", request.audio_bitrate])
             if request.denoise_audio:
-                # afftdn: Audio FFT Denoise filtresi dip sesi azaltir.
                 command.extend(["-af", "afftdn"])
+
+        if str(output_path).lower().endswith(".mp4"):
+            command.extend(["-movflags", "+faststart"])
 
         command.append(output_path)
         return command
@@ -253,27 +290,191 @@ class ExportService:
         output_path = Path(request.output_path)
         work_dir = output_path.parent
         ass_path: Path | None = None
+        fonts_dir: Path | None = None
         if subtitles:
             self._notify(progress_callback, 2, "Altyazi dosyasi hazirlaniyor...")
+            subtitles = ensure_subtitle_words(subtitles)
+            fonts_dir, ass_font_name = prepare_export_fonts(request.font_name, work_dir)
             ass_path = output_path.with_suffix(".ass")
-            ass_path.write_text(self._build_ass_document(request, subtitles), encoding="utf-8-sig")
+            ass_path.write_text(
+                self._build_ass_document(request, subtitles, ass_font_name),
+                encoding="utf-8-sig",
+            )
         else:
             self._notify(progress_callback, 2, "Video hazirlaniyor...")
 
         self._notify(progress_callback, 8, "Video segmentleri hazirlaniyor...")
-        video_input, _ = self._prepare_video_source(request, work_dir)
-        command = self._build_ffmpeg_command(request, ass_path, str(output_path), video_input)
+        video_input, _ = self._prepare_video_source(
+            request, work_dir, progress_callback=progress_callback
+        )
+        request = self._resolve_gpu_request(request, progress_callback)
+        ffmpeg_cwd = Path(ass_path.parent) if ass_path is not None else work_dir
+        command = self._build_ffmpeg_command(
+            request,
+            ass_path,
+            str(output_path),
+            video_input,
+            fonts_dir=fonts_dir,
+            ffmpeg_cwd=ffmpeg_cwd,
+        )
+
+        resolved_duration_ms = self._resolve_export_duration_ms(
+            total_duration_ms,
+            video_input,
+            request,
+        )
 
         self._notify(progress_callback, 12, "FFmpeg disa aktarimi basliyor...")
-        ffmpeg_cwd = str(ass_path.parent) if ass_path is not None else str(work_dir)
-        self._run_ffmpeg(command, ffmpeg_cwd, progress_callback, total_duration_ms)
+        self._run_ffmpeg_with_gpu_fallback(
+            request,
+            command,
+            ass_path,
+            str(output_path),
+            video_input,
+            str(ffmpeg_cwd),
+            progress_callback,
+            resolved_duration_ms,
+            fonts_dir,
+        )
         self._notify(progress_callback, 100, "Tamamlandi")
         return output_path
+
+    def _resolve_gpu_request(
+        self,
+        request: ExportRequest,
+        progress_callback: Callable[[str], None] | None,
+    ) -> ExportRequest:
+        if not request.use_gpu:
+            return request
+        if is_nvenc_available():
+            return request
+        self._notify(
+            progress_callback,
+            10,
+            "NVIDIA GPU kullanilamiyor; CPU kodlayici (libx264) ile devam ediliyor...",
+        )
+        return replace(request, use_gpu=False)
+
+    @staticmethod
+    def _is_nvenc_failure(stderr: str) -> bool:
+        lowered = stderr.lower()
+        markers = ("nvcuda.dll", "h264_nvenc", "nvenc", "cuda")
+        return any(marker in lowered for marker in markers)
+
+    def _run_ffmpeg_with_gpu_fallback(
+        self,
+        request: ExportRequest,
+        command: list[str],
+        ass_path: Path | None,
+        output_path: str,
+        video_input: str,
+        ffmpeg_cwd: str,
+        progress_callback: Callable[[str], None] | None,
+        total_duration_ms: int,
+        fonts_dir: Path | None = None,
+    ) -> None:
+        try:
+            self._run_ffmpeg(command, ffmpeg_cwd, progress_callback, total_duration_ms)
+        except RuntimeError as exc:
+            if not request.use_gpu or not self._is_nvenc_failure(str(exc)):
+                raise
+            self._notify(
+                progress_callback,
+                12,
+                "GPU hatasi algilandi; CPU kodlayici ile tekrar deneniyor...",
+            )
+            cpu_request = replace(request, use_gpu=False)
+            cpu_command = self._build_ffmpeg_command(
+                cpu_request,
+                ass_path,
+                output_path,
+                video_input,
+                fonts_dir=fonts_dir,
+                ffmpeg_cwd=Path(ffmpeg_cwd),
+            )
+            self._run_ffmpeg(cpu_command, ffmpeg_cwd, progress_callback, total_duration_ms)
 
     @staticmethod
     def _notify(callback: Callable[[str], None] | None, percent: int, message: str) -> None:
         if callback:
             callback(f"{percent}|{message}")
+
+    @staticmethod
+    def _resolve_export_duration_ms(
+        total_duration_ms: int,
+        video_input: str,
+        request: ExportRequest,
+    ) -> int:
+        if total_duration_ms > 0:
+            return total_duration_ms
+
+        segments = request.video_segments
+        if segments:
+            segment_total = 0
+            for _path, start_ms, end_ms, _effects in segments:
+                if end_ms > start_ms:
+                    segment_total += end_ms - start_ms
+                else:
+                    probed = probe_duration_ms(_path)
+                    if probed > 0:
+                        segment_total += probed
+            if segment_total > 0:
+                return segment_total
+
+        probed = probe_duration_ms(video_input)
+        if probed > 0:
+            return probed
+        return max(total_duration_ms, 1)
+
+    @staticmethod
+    def _format_progress_time(ms: int) -> str:
+        total_seconds, milliseconds = divmod(max(0, ms), 1000)
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+
+    def _progress_from_output_time(self, line: str, total_duration_ms: int) -> int | None:
+        if line.startswith("out_time_us="):
+            try:
+                out_us = int(line.split("=", 1)[1])
+                ratio = min(1.0, out_us / (max(total_duration_ms, 1) * 1000))
+                return 12 + int(ratio * 86)
+            except ValueError:
+                return None
+
+        if line.startswith("out_time_ms="):
+            try:
+                out_ms = int(line.split("=", 1)[1])
+                ratio = min(1.0, out_ms / max(total_duration_ms, 1))
+                return 12 + int(ratio * 86)
+            except ValueError:
+                return None
+
+        if line.startswith("out_time="):
+            out_ms = _parse_progress_time_ms(line)
+            if out_ms is None:
+                return None
+            ratio = min(1.0, out_ms / max(total_duration_ms, 1))
+            return 12 + int(ratio * 86)
+
+        return None
+
+    def _current_output_ms(self, line: str) -> int | None:
+        if line.startswith("out_time_us="):
+            try:
+                return int(line.split("=", 1)[1]) // 1000
+            except ValueError:
+                return None
+        if line.startswith("out_time_ms="):
+            try:
+                return int(line.split("=", 1)[1])
+            except ValueError:
+                return None
+        if line.startswith("out_time="):
+            return _parse_progress_time_ms(line)
+        return None
 
     def _run_ffmpeg(
         self,
@@ -283,8 +484,10 @@ class ExportService:
         total_duration_ms: int,
     ) -> None:
         run_command = list(command)
+        if "-nostdin" not in run_command:
+            run_command.insert(1, "-nostdin")
         if progress_callback:
-            run_command[1:1] = ["-progress", "pipe:1", "-nostats"]
+            run_command[1:1] = ["-progress", "pipe:1", "-nostats", "-loglevel", "error"]
 
         process = subprocess.Popen(
             run_command,
@@ -295,24 +498,61 @@ class ExportService:
             bufsize=1,
         )
 
-        total_us = max(total_duration_ms, 1) * 1000
+        stderr_chunks: list[str] = []
+        total_ms = max(total_duration_ms, 1)
+        total_label = self._format_progress_time(total_ms)
+        progress_state = {"last_percent": 12}
 
-        if progress_callback and process.stdout:
-            for line in process.stdout:
-                line = line.strip()
-                if line.startswith("out_time_us="):
-                    try:
-                        out_us = int(line.split("=", 1)[1])
-                        ratio = min(1.0, out_us / total_us)
-                        percent = 12 + int(ratio * 86)
-                        self._notify(progress_callback, percent, "Video disa aktariliyor...")
-                    except ValueError:
+        def _drain_stderr() -> None:
+            if not process.stderr:
+                return
+            try:
+                stderr_chunks.append(process.stderr.read() or "")
+            except Exception:
+                pass
+
+        def _drain_stdout() -> None:
+            if not process.stdout:
+                return
+            try:
+                for line in process.stdout:
+                    line = line.strip()
+                    if not line:
                         continue
-                elif line == "progress=end":
-                    self._notify(progress_callback, 98, "Dosya yaziliyor...")
 
-        stderr = process.stderr.read() if process.stderr else ""
+                    percent = self._progress_from_output_time(line, total_ms)
+                    if percent is not None:
+                        progress_state["last_percent"] = max(progress_state["last_percent"], percent)
+                        current_ms = self._current_output_ms(line)
+                        if current_ms is not None:
+                            current_label = self._format_progress_time(current_ms)
+                            message = f"Video disa aktariliyor... {current_label} / {total_label}"
+                        else:
+                            message = "Video disa aktariliyor..."
+                        self._notify(progress_callback, progress_state["last_percent"], message)
+                        continue
+
+                    if line == "progress=continue" and progress_state["last_percent"] == 12:
+                        self._notify(
+                            progress_callback,
+                            12,
+                            f"Video isleniyor... 00:00 / {total_label}",
+                        )
+                    elif line == "progress=end":
+                        self._notify(progress_callback, 98, "Dosya yaziliyor...")
+            except Exception:
+                pass
+
+        stdout_thread = threading.Thread(target=_drain_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
         code = process.wait()
+        stdout_thread.join(timeout=60)
+        stderr_thread.join(timeout=60)
+
+        stderr = "".join(stderr_chunks)
         if code != 0:
             raise RuntimeError(stderr.strip() or "FFmpeg export basarisiz oldu.")
 
@@ -321,13 +561,20 @@ class ExportService:
         work_dir = Path(request.output_path).parent
         output_path = work_dir / "preview_frame.jpg"
         ass_path: Path | None = None
+        fonts_dir: Path | None = None
         if subtitles:
+            fonts_dir, ass_font_name = prepare_export_fonts(request.font_name, work_dir)
+            subtitles = ensure_subtitle_words(subtitles)
             ass_path = work_dir / "preview_temp.ass"
-            ass_path.write_text(self._build_ass_document(request, subtitles), encoding="utf-8-sig")
+            ass_path.write_text(
+                self._build_ass_document(request, subtitles, ass_font_name),
+                encoding="utf-8-sig",
+            )
 
         video_input, _ = self._prepare_video_source(
             request, work_dir, is_preview=True, preview_time_sec=current_ms / 1000.0
         )
+        preview_cwd = work_dir
         command = self._build_ffmpeg_command(
             request,
             ass_path,
@@ -335,6 +582,8 @@ class ExportService:
             video_input,
             is_preview=True,
             preview_time_sec=current_ms / 1000.0,
+            fonts_dir=fonts_dir,
+            ffmpeg_cwd=preview_cwd,
         )
         
         result = subprocess.run(
@@ -349,11 +598,34 @@ class ExportService:
             
         return output_path
 
-    def _build_ass_document(self, request: ExportRequest, subtitles: list[TimedSubtitle]) -> str:
+    def _build_ass_document(
+        self,
+        request: ExportRequest,
+        subtitles: list[TimedSubtitle],
+        ass_font_name: str | None = None,
+    ) -> str:
         border_style = "3" if request.bg_box else "1"
         back_color = "&H80000000" if request.bg_box else "&H64000000"
+        font_name = ass_font_name or request.font_name
+        use_karaoke = any(subtitle.words for subtitle in subtitles)
+        normal_colour = self._hex_to_ass_color(request.normal_color)
+        active_colour = self._hex_to_ass_color(request.active_color)
+        if use_karaoke:
+            # \\k: kelime basinda anlik renk degisimi (\\kf duz/sweep dolgu yapar)
+            primary_colour = active_colour
+            secondary_colour = normal_colour
+        else:
+            primary_colour = normal_colour
+            secondary_colour = "&H000000FF"
 
         play_x, play_y = play_resolution(request.aspect_ratio)
+        font_size, stroke_size, shadow_size = export_style_from_preview(
+            request.font_size,
+            request.stroke_size,
+            request.shadow_size,
+            play_y,
+            request.preview_height_px,
+        )
         alignment, margin_v = ass_style_values(request.position, play_y)
         lines = [
             "[Script Info]",
@@ -369,9 +641,9 @@ class ExportService:
             "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
             (
                 "Style: Default,"
-                f"{request.font_name},{request.font_size},{self._hex_to_ass_color(request.normal_color)},"
-                f"&H000000FF,&H00000000,{back_color},0,0,0,0,100,100,0,0,{border_style},"
-                f"{request.stroke_size},{request.shadow_size},{alignment},60,60,{margin_v},1"
+                f"{font_name},{font_size},{primary_colour},"
+                f"{secondary_colour},&H00000000,{back_color},0,0,0,0,100,100,0,0,{border_style},"
+                f"{stroke_size},{shadow_size},{alignment},60,60,{margin_v},1"
             ),
             "",
             "[Events]",
@@ -379,39 +651,43 @@ class ExportService:
         ]
 
         for subtitle in subtitles:
-            if not subtitle.words:
-                lines.append(
-                    "Dialogue: 0,"
-                    f"{self._ms_to_ass_time(subtitle.start_ms)},{self._ms_to_ass_time(subtitle.end_ms)},"
-                    f"Default,,0,0,0,,{self._escape_ass_text(subtitle.text)}"
-                )
-                continue
+            if use_karaoke and subtitle.words:
+                text = self._build_karaoke_text(subtitle)
+                effect = "karaoke"
+            else:
+                text = self._escape_ass_text(subtitle.text)
+                effect = ""
 
-            for word in subtitle.words:
-                lines.append(
-                    "Dialogue: 0,"
-                    f"{self._ms_to_ass_time(word.start_ms)},{self._ms_to_ass_time(word.end_ms)},"
-                    f"Default,,0,0,0,,{self._build_dialogue_text(subtitle, word.index, request)}"
-                )
+            lines.append(
+                "Dialogue: 0,"
+                f"{self._ms_to_ass_time(subtitle.start_ms)},{self._ms_to_ass_time(subtitle.end_ms)},"
+                f"Default,,0,0,0,{effect},{text}"
+            )
 
         return "\n".join(lines) + "\n"
 
-    def _build_dialogue_text(self, subtitle: TimedSubtitle, active_index: int, request: ExportRequest) -> str:
-        words: list[str] = []
-        active_ass_color = self._hex_to_ass_color(request.active_color)
-        style = request.animation_style if request.animation_style != "Yok" else ANIMATION_NONE
-        if not request.use_animation:
-            style = ANIMATION_NONE
+    def _build_karaoke_text(self, subtitle: TimedSubtitle) -> str:
+        """Onizlemedeki kelime vurgusu ile ayni zamanlama: \\k etiketleri."""
+        words = subtitle.words
+        if not words:
+            return self._escape_ass_text(subtitle.text)
 
-        for word in subtitle.words:
-            escaped_word = self._escape_ass_text(word.text)
-            if word.index == active_index:
-                tags = build_active_word_tags(style, active_ass_color)
-                words.append(f"{tags}{escaped_word}{{\\r}}")
+        line_start = subtitle.start_ms
+        parts: list[str] = []
+
+        lead_ms = words[0].start_ms - line_start
+        if lead_ms > 0:
+            parts.append(f"{{\\k{max(1, lead_ms // 10)}}}")
+
+        for index, word in enumerate(words):
+            if index + 1 < len(words):
+                duration_ms = words[index + 1].start_ms - word.start_ms
             else:
-                words.append(escaped_word)
+                duration_ms = max(subtitle.end_ms - word.start_ms, word.end_ms - word.start_ms)
+            duration_cs = max(1, duration_ms // 10)
+            parts.append(f"{{\\k{duration_cs}}}{self._escape_ass_text(word.text)}")
 
-        return " ".join(words)
+        return " ".join(parts)
 
     def _hex_to_ass_color(self, value: str) -> str:
         cleaned = value.lstrip("#")

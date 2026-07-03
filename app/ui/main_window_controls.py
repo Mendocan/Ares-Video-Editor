@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QFontDatabase, QPalette
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QColorDialog,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 
 from app.core.animation_presets import ANIMATION_POP, animation_names
+from app.core.ffmpeg_paths import is_nvenc_available
 from app.core.style_presets import CUSTOM_PRESET_NAME, default_aspect_ratio_options, get_preset, preset_names
 from app.core.subtitle_positions import position_names
 from app.core.video_presets import is_vertical_format
@@ -194,8 +197,16 @@ class MainWindowControlsMixin:
         self.denoise_checkbox.setChecked(False)
 
         self.gpu_checkbox = QCheckBox("GPU Hızlandırma (NVIDIA NVENC)")
-        self.gpu_checkbox.setChecked(True)
-        self.gpu_checkbox.setToolTip("NVIDIA ekran kartınız varsa dışa aktarımı çok hızlandırır.")
+        gpu_ready = is_nvenc_available()
+        self.gpu_checkbox.setChecked(gpu_ready)
+        self.gpu_checkbox.setEnabled(gpu_ready)
+        if gpu_ready:
+            self.gpu_checkbox.setToolTip("NVIDIA ekran kartınız varsa dışa aktarımı çok hızlandırır.")
+        else:
+            self.gpu_checkbox.setToolTip(
+                "Bu bilgisayarda NVIDIA NVENC kullanılamıyor (nvcuda.dll / sürücü yok). "
+                "Export CPU ile yapılır."
+            )
 
         layout.addRow("Format", self.format_combo)
         layout.addRow("FPS", self.fps_combo)
@@ -394,9 +405,31 @@ class MainWindowControlsMixin:
         self.position_combo.currentTextChanged.connect(self._on_style_control_changed)
 
         self.font_size_spin = QSpinBox()
-        self.font_size_spin.setRange(14, 80)
+        self.font_size_spin.setRange(8, 96)
         self.font_size_spin.setValue(32)
-        self.font_size_spin.valueChanged.connect(self._on_style_control_changed)
+        self.font_size_spin.setSuffix(" px")
+        self.font_size_spin.setAccelerated(True)
+        self.font_size_spin.setKeyboardTracking(False)
+        self.font_size_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.font_size_spin.setFixedWidth(58)
+        self.font_size_spin.setToolTip("8–96 px — kaydırıcı veya doğrudan yazın")
+
+        self.font_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.font_size_slider.setRange(8, 96)
+        self.font_size_slider.setValue(32)
+        self.font_size_slider.setPageStep(4)
+        self.font_size_slider.setSingleStep(1)
+        self.font_size_slider.setToolTip("Yazı boyutunu sürükleyerek ayarlayın")
+
+        font_size_row = QWidget()
+        font_size_layout = QHBoxLayout(font_size_row)
+        font_size_layout.setContentsMargins(0, 0, 0, 0)
+        font_size_layout.setSpacing(8)
+        font_size_layout.addWidget(self.font_size_slider, 1)
+        font_size_layout.addWidget(self.font_size_spin)
+
+        self.font_size_slider.valueChanged.connect(self._on_font_size_slider_changed)
+        self.font_size_spin.valueChanged.connect(self._on_font_size_spin_changed)
 
         self.stroke_spin = QSpinBox()
         self.stroke_spin.setRange(0, 12)
@@ -421,7 +454,7 @@ class MainWindowControlsMixin:
         layout.addRow("Normal Renk", self.normal_color_button)
         layout.addRow("Aktif Kelime Rengi", self.active_color_button)
         layout.addRow("Konum", self.position_combo)
-        layout.addRow("Yazı Boyutu", self.font_size_spin)
+        layout.addRow("Yazı Boyutu", font_size_row)
         layout.addRow("Kalınlık", self.stroke_spin)
         layout.addRow("Gölge", self.shadow_spin)
         layout.addRow("Animasyon", self.anim_combo)
@@ -442,6 +475,29 @@ class MainWindowControlsMixin:
         self.preview_format_combo.blockSignals(True)
         self.preview_format_combo.setCurrentText(target)
         self.preview_format_combo.blockSignals(False)
+
+    def _set_font_size(self, value: int) -> None:
+        value = max(8, min(96, int(value)))
+        self.font_size_spin.blockSignals(True)
+        self.font_size_slider.blockSignals(True)
+        self.font_size_spin.setValue(value)
+        self.font_size_slider.setValue(value)
+        self.font_size_spin.blockSignals(False)
+        self.font_size_slider.blockSignals(False)
+
+    def _on_font_size_slider_changed(self, value: int) -> None:
+        if self.font_size_spin.value() != value:
+            self.font_size_spin.blockSignals(True)
+            self.font_size_spin.setValue(value)
+            self.font_size_spin.blockSignals(False)
+        self._on_style_control_changed()
+
+    def _on_font_size_spin_changed(self, value: int) -> None:
+        if self.font_size_slider.value() != value:
+            self.font_size_slider.blockSignals(True)
+            self.font_size_slider.setValue(value)
+            self.font_size_slider.blockSignals(False)
+        self._on_style_control_changed()
 
     def _on_style_control_changed(self, *_args) -> None:
         if getattr(self, "_applying_preset", False):
@@ -464,7 +520,7 @@ class MainWindowControlsMixin:
         try:
             self.preset_desc_label.setText(preset.description)
             self.font_combo.setCurrentText(preset.font_name)
-            self.font_size_spin.setValue(preset.font_size)
+            self._set_font_size(preset.font_size)
             self.normal_color = QColor(preset.normal_color)
             self.active_color = QColor(preset.active_color)
             self._update_color_button("normal")

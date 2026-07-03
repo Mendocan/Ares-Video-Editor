@@ -120,18 +120,18 @@ def remap_subtitles_for_segments(
     segments: list[tuple[int, int]],
 ) -> list[TimedSubtitle]:
     """
-  Kaynak video segmentlerine göre altyazı zamanlarını yeniden eşler.
-  segments: (kaynak_baslangic_ms, kaynak_bitis_ms) listesi.
-  """
+    Kaynak video segmentlerine göre altyazı zamanlarını yeniden eşler.
+    Whisper kelime zamanlamaları korunur.
+    segments: (kaynak_baslangic_ms, kaynak_bitis_ms) listesi.
+    """
     if not segments:
         return subtitles
 
     output_cursor = 0
-    mapped: list[SubtitleEntry] = []
+    mapped: list[TimedSubtitle] = []
     index = 1
 
     for seg_start, seg_end in segments:
-        seg_duration = seg_end - seg_start
         for ts in subtitles:
             entry = ts.entry
             if entry.end_ms <= seg_start or entry.start_ms >= seg_end:
@@ -139,31 +139,53 @@ def remap_subtitles_for_segments(
 
             clip_start = max(entry.start_ms, seg_start)
             clip_end = min(entry.end_ms, seg_end)
-            offset = output_cursor + (clip_start - seg_start)
+            line_start = output_cursor + (clip_start - seg_start)
+            line_end = line_start + (clip_end - clip_start)
 
-            words_in_range = [
-                w for w in ts.words
-                if w.end_ms > seg_start and w.start_ms < seg_end
-            ]
-            if not words_in_range:
+            remapped_words: list[TimedWord] = []
+            for word in ts.words:
+                if word.end_ms <= seg_start or word.start_ms >= seg_end:
+                    continue
+                word_clip_start = max(word.start_ms, seg_start)
+                word_clip_end = min(word.end_ms, seg_end)
+                word_offset = word_clip_start - clip_start
+                remapped_words.append(
+                    TimedWord(
+                        text=word.text,
+                        start_ms=line_start + word_offset,
+                        end_ms=line_start + word_offset + (word_clip_end - word_clip_start),
+                        index=len(remapped_words),
+                    )
+                )
+
+            if remapped_words:
+                text = " ".join(word.text for word in remapped_words)
+            elif entry.text.strip():
+                text = entry.text
+            else:
                 continue
 
-            text = " ".join(w.text for w in words_in_range)
             mapped.append(
-                SubtitleEntry(
-                    index=index,
-                    start=_ms_to_srt(offset),
-                    end=_ms_to_srt(offset + (clip_end - clip_start)),
-                    text=text,
-                    start_ms=offset,
-                    end_ms=offset + (clip_end - clip_start),
+                TimedSubtitle(
+                    entry=SubtitleEntry(
+                        index=index,
+                        start=_ms_to_srt(line_start),
+                        end=_ms_to_srt(line_end),
+                        text=text,
+                        start_ms=line_start,
+                        end_ms=line_end,
+                    ),
+                    words=remapped_words,
                 )
             )
             index += 1
 
-        output_cursor += seg_duration
+        output_cursor += seg_end - seg_start
 
-    return build_word_timings(mapped)
+    if not mapped:
+        return subtitles
+
+    return mapped
 
 
 def _ms_to_srt(ms: int) -> str:

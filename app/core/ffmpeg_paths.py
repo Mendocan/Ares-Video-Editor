@@ -105,3 +105,42 @@ def ffmpeg_version() -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.splitlines()[0] if result.stdout else None
+
+
+_nvenc_cache: bool | None = None
+
+
+def is_nvenc_available(*, force_refresh: bool = False) -> bool:
+    """NVIDIA NVENC'in gercekten calisip calismadigini kisa bir FFmpeg testiyle kontrol eder."""
+    global _nvenc_cache
+    if not force_refresh and _nvenc_cache is not None:
+        return _nvenc_cache
+
+    ffmpeg = ensure_ffmpeg_on_path()
+    if not ffmpeg:
+        _nvenc_cache = False
+        return False
+
+    result = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=64x64:d=0.1",
+            "-c:v",
+            "h264_nvenc",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    _nvenc_cache = result.returncode == 0
+    return _nvenc_cache

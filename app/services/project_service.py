@@ -32,7 +32,7 @@ class ProjectStyle:
     fps: str = "Orijinal"
     audio_bitrate: str = "192k"
     denoise_audio: bool = False
-    use_gpu: bool = True
+    use_gpu: bool = False
     translate: bool = False
     preset_name: str = "Özel"
 

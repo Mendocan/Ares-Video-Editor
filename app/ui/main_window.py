@@ -84,6 +84,7 @@ from app.services.project_service import PROJECT_EXTENSION, ProjectService, Proj
 from app.services.transcription_service import TranscriptionResult, TranscriptionService
 from app.ui.batch_dialog import BatchExportDialog
 from app.ui.clip_effects_dialog import ClipEffectsDialog
+from app.ui.export_sound import ExportCompleteSound
 from app.ui.export_dialog import ExportDialog
 from app.ui.subtitle_editor import SubtitleEditorDialog
 from app.ui.transcription_dialog import TranscriptionDialog
@@ -118,6 +119,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.project_path: str | None = None
         self.word_timing_doc: WordTimingDocument | None = None
         self.thread_pool = QThreadPool()
+        self._export_complete_sound = ExportCompleteSound(self)
 
         # Medya Oynatici (Gercek video onizlemesi)
         self.media_player = QMediaPlayer()
@@ -125,11 +127,13 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.media_player.setAudioOutput(self.audio_output)
         self.media_player.durationChanged.connect(self._on_video_duration_changed)
         self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
+        self.media_player.positionChanged.connect(self._on_media_position_changed)
 
         # Alternatif onizleme zamanlayicisi (Video yoksa SRT onizlemesi icin)
         self.preview_timer = QTimer(self)
         self.preview_timer.setInterval(80)
         self.preview_timer.timeout.connect(self._advance_preview)
+        self._last_playback_pos_ms: int | None = None
 
         self.setWindowTitle("Ares Editor 2026")
         self.resize(1180, 760)
@@ -837,7 +841,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
 
     def _apply_project_style(self, style: ProjectStyle) -> None:
         self.font_combo.setCurrentText(style.font_name)
-        self.font_size_spin.setValue(style.font_size)
+        self._set_font_size(style.font_size)
         self.normal_color = QColor(style.normal_color)
         self.active_color = QColor(style.active_color)
         self._update_color_button("normal")
@@ -991,20 +995,36 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.statusBar().showMessage(f"Proje yuklendi: {Path(file_path).name}")
 
     def _export_subtitles_for_timeline(self) -> list:
+        from app.core.word_timing import ensure_subtitle_words
+
         segments = [
             (start, end)
             for _path, start, end, _effects in self.timeline_model.video_segments_for_export()
         ]
-        if not segments or not self.timed_subtitles:
-            return self.timed_subtitles
-        if len(segments) == 1 and segments[0][0] == 0:
-            clip = self.timeline_model.clips_on_track("video")
+        if not self.timed_subtitles:
+            return []
+
+        if not segments:
+            subs = self.timed_subtitles
+        elif len(segments) == 1 and segments[0][0] == 0:
+            clip = self.timeline_model.clips_on_track(TRACK_VIDEO)
             if clip and clip[0].source_start_ms == 0:
-                return self.timed_subtitles
-        return remap_subtitles_for_segments(self.timed_subtitles, segments)
+                subs = self.timed_subtitles
+            else:
+                subs = remap_subtitles_for_segments(self.timed_subtitles, segments)
+        else:
+            subs = remap_subtitles_for_segments(self.timed_subtitles, segments)
+
+        if self.word_timing_doc and subs is self.timed_subtitles:
+            subs = build_timed_subtitles(self.subtitle_entries, self.word_timing_doc)
+
+        return ensure_subtitle_words(subs)
 
     def _build_export_request(self, output_path: str) -> ExportRequest:
         segments = self.timeline_model.video_segments_for_export()
+        preview_height = 0
+        if hasattr(self, "preview_video_host"):
+            preview_height = max(self.preview_video_host.height(), 1)
         return ExportRequest(
             video_path=self.video_path or "",
             subtitle_path=self.subtitle_path or "",
@@ -1028,6 +1048,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             use_gpu=self.gpu_checkbox.isChecked(),
             bg_box=self.bg_box_checkbox.isChecked(),
             video_segments=segments,
+            preview_height_px=preview_height,
         )
 
     def _on_video_duration_changed(self, duration: int) -> None:
@@ -1237,7 +1258,12 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             self.statusBar().showMessage("Export icin once video secin.")
             return
 
-        duration_ms = self.timeline_model.duration_ms or self.media_player.duration() or 0
+        duration_ms = (
+            self.timeline_panel.playhead_max_ms()
+            or self.timeline_model.duration_ms
+            or self.media_player.duration()
+            or 0
+        )
         default_title = Path(self.video_path).stem + ("_subtitled" if self.timed_subtitles else "_export")
         default_folder = str(Path.cwd() / "output")
 
@@ -1253,8 +1279,6 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             return
 
         result = dialog.result_data
-        if result.aspect_ratio in default_aspect_ratio_options():
-            self.format_combo.setCurrentText(result.aspect_ratio)
         if result.fps in [self.fps_combo.itemText(i) for i in range(self.fps_combo.count())]:
             self.fps_combo.setCurrentText(result.fps)
         if result.audio_bitrate in [self.audio_quality_combo.itemText(i) for i in range(self.audio_quality_combo.count())]:
@@ -1294,7 +1318,6 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
                 progress.setLabelText(label)
             else:
                 progress.setLabelText(message)
-            QApplication.processEvents()
 
         worker.signals.progress.connect(on_progress)
         worker.signals.result.connect(
@@ -1303,26 +1326,49 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         worker.signals.error.connect(
             lambda err: self._on_export_error(progress, err)
         )
-        worker.signals.finished.connect(lambda: progress.close())
 
+        self._export_progress = progress
         self.export_button.setEnabled(False)
         self.btn_export_mini.setEnabled(False)
         self.statusBar().showMessage("FFmpeg export basladi...")
         self.thread_pool.start(worker)
 
+    def _finish_export_progress(self, progress: QProgressDialog) -> None:
+        progress.hide()
+        progress.reset()
+        if getattr(self, "_export_progress", None) is progress:
+            self._export_progress = None
+        progress.deleteLater()
+
     def _on_export_success(self, progress: QProgressDialog, exported_path) -> None:
         self.export_button.setEnabled(True)
         self.btn_export_mini.setEnabled(True)
-        progress.setValue(100)
-        QMessageBox.information(self, "Export Tamamlandi", f"Cikti hazir: {exported_path}")
-        self.statusBar().showMessage(f"Export tamamlandi: {exported_path}")
+        path_str = str(exported_path)
+        if progress is not None:
+            progress.setValue(100)
+            progress.setLabelText("Tamamlandi!")
+        self._export_complete_sound.play()
+
+        def finalize() -> None:
+            if progress is not None:
+                self._finish_export_progress(progress)
+            QMessageBox.information(self, "Export Tamamlandi", f"Cikti hazir:\n{path_str}")
+            self.statusBar().showMessage(f"Export tamamlandi: {path_str}")
+
+        QTimer.singleShot(350, finalize)
 
     def _on_export_error(self, progress: QProgressDialog, error_data: tuple) -> None:
         self.export_button.setEnabled(True)
         self.btn_export_mini.setEnabled(True)
         _exc, trace = error_data
-        QMessageBox.critical(self, "Export Hatasi", str(trace))
-        self.statusBar().showMessage("Export basarisiz oldu.")
+        if progress is not None:
+            self._finish_export_progress(progress)
+
+        def show_error() -> None:
+            QMessageBox.critical(self, "Export Hatasi", str(trace))
+            self.statusBar().showMessage("Export basarisiz oldu.")
+
+        QTimer.singleShot(0, show_error)
 
     def _update_actions(self) -> None:
         self.transcribe_button.setEnabled(bool(self.video_path))

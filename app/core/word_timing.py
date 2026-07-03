@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.core.subtitle_text import capitalize_word_start
 from app.core.subtitle_parser import SubtitleEntry
 
 
@@ -64,9 +65,26 @@ def build_word_timings(entries: list[SubtitleEntry]) -> list[TimedSubtitle]:
             )
             cursor = word_end
 
+        timed_words = _ensure_first_word_capitalized(timed_words)
         timed_subtitles.append(TimedSubtitle(entry=entry, words=timed_words))
 
     return timed_subtitles
+
+
+def _ensure_first_word_capitalized(words: list[TimedWord]) -> list[TimedWord]:
+    if not words:
+        return words
+    first = words[0]
+    capped = capitalize_word_start(first.text)
+    if capped == first.text:
+        return words
+    words[0] = TimedWord(
+        text=capped,
+        start_ms=first.start_ms,
+        end_ms=first.end_ms,
+        index=first.index,
+    )
+    return words
 
 
 def find_subtitle_at_time(subtitles: list[TimedSubtitle], current_ms: int) -> TimedSubtitle | None:
@@ -77,11 +95,23 @@ def find_subtitle_at_time(subtitles: list[TimedSubtitle], current_ms: int) -> Ti
 
 
 def find_active_word_index(subtitle: TimedSubtitle | None, current_ms: int) -> int | None:
-    if subtitle is None:
+    if subtitle is None or not subtitle.words:
         return None
 
     for word in subtitle.words:
-        if word.start_ms <= current_ms <= word.end_ms:
+        if word.start_ms <= current_ms < word.end_ms:
             return word.index
 
-    return subtitle.words[-1].index if subtitle.words else None
+    return None
+
+
+def ensure_subtitle_words(subtitles: list[TimedSubtitle]) -> list[TimedSubtitle]:
+    """Kelime zamanlamasi eksik altyazilar icin metinden zamanlama uretir."""
+    output: list[TimedSubtitle] = []
+    for subtitle in subtitles:
+        if subtitle.words:
+            output.append(subtitle)
+            continue
+        rebuilt = build_word_timings([subtitle.entry])
+        output.append(rebuilt[0] if rebuilt else subtitle)
+    return output
