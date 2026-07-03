@@ -21,6 +21,25 @@ import qtawesome as qta
 
 from app.core.subtitle_positions import preview_padding, qt_preview_alignment
 from app.core.word_timing import TimedSubtitle, find_active_word_index, find_subtitle_at_time
+from app.ui.app_theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    ACCENT_SELECTION,
+    BG_PANEL,
+    BG_PREVIEW_SHELL,
+    BG_PREVIEW_VIDEO,
+    BG_TRANSPORT,
+    BORDER,
+    BTN_PRIMARY_GRADIENT,
+    BTN_PRIMARY_HOVER,
+    COLOR_PLAY,
+    COLOR_STOP,
+    COLOR_TRANSPORT,
+    COLOR_TRANSPORT_DIM,
+    TEXT_MUTED,
+    TEXT_ON_ACCENT,
+    TEXT_PRIMARY,
+)
 from app.ui.aspect_ratio_frame import AspectRatioFrame
 from app.ui.preview_settings_dialog import PreviewSettingsDialog
 from app.ui.preview_widgets import AudioVisualizer, COLOR_PLAY_TEAL, PreviewVideoHost
@@ -59,7 +78,7 @@ class MainWindowPreviewMixin:
     def _build_preview_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("previewPanel")
-        panel.setStyleSheet("QFrame#previewPanel { background-color: #0B1120; border-radius: 8px; }")
+        panel.setStyleSheet(f"QFrame#previewPanel {{ background-color: {BG_PREVIEW_SHELL}; border-radius: 8px; }}")
         
         main_layout = QHBoxLayout(panel)
         main_layout.setContentsMargins(10, 10, 10, 10)
@@ -76,7 +95,7 @@ class MainWindowPreviewMixin:
         self.preview_surface.setMinimumSize(120, 120)
         self.preview_surface.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview_surface.setStyleSheet(
-            "#previewSurface { background-color: #000000; border-radius: 8px; border: 1px solid #1E293B; }"
+            f"#previewSurface {{ background-color: {BG_PREVIEW_VIDEO}; border-radius: 8px; border: 1px solid {BORDER}; }}"
         )
         surface_layout = QVBoxLayout(self.preview_surface)
         surface_layout.setContentsMargins(0, 0, 0, 0)
@@ -96,17 +115,17 @@ class MainWindowPreviewMixin:
         transport_widget = QWidget()
         transport_widget.setFixedHeight(48)
         transport_widget.setStyleSheet(
-            "background: #0D1117;"
-            "border-top: 1px solid #1E293B;"
+            f"background: {BG_TRANSPORT};"
+            f"border-top: 1px solid {BORDER};"
         )
         controls_row = QHBoxLayout(transport_widget)
         controls_row.setContentsMargins(10, 0, 10, 0)
         controls_row.setSpacing(8)
 
-        C_TRANSPORT = "#94A3B8"
-        C_TRANSPORT_DIM = "#64748B"
-        C_PLAY_ACCENT = "#22D3EE"
-        C_STOP_ACCENT = "#F87171"
+        C_TRANSPORT = COLOR_TRANSPORT
+        C_TRANSPORT_DIM = COLOR_TRANSPORT_DIM
+        C_PLAY_ACCENT = COLOR_PLAY
+        C_STOP_ACCENT = COLOR_STOP
 
         def make_transport_btn(
             icon_name: str,
@@ -129,13 +148,13 @@ class MainWindowPreviewMixin:
                     padding: 0px;
                 }}
                 QPushButton:hover {{
-                    background: rgba(148, 163, 184, 0.12);
+                    background: rgba(60, 66, 74, 0.12);
                 }}
                 QPushButton:pressed {{
-                    background: rgba(148, 163, 184, 0.2);
+                    background: rgba(60, 66, 74, 0.2);
                 }}
                 QPushButton:disabled {{
-                    color: #334155;
+                    color: {TEXT_MUTED};
                 }}
             """)
             if callback:
@@ -146,7 +165,7 @@ class MainWindowPreviewMixin:
             d = QFrame()
             d.setFrameShape(QFrame.VLine)
             d.setFixedSize(1, height)
-            d.setStyleSheet("background: #252F42; border: none;")
+            d.setStyleSheet(f"background: {BORDER}; border: none;")
             return d
 
         transport_cluster = QWidget()
@@ -197,7 +216,7 @@ class MainWindowPreviewMixin:
         self.timeline_label.setAlignment(Qt.AlignCenter)
         self.timeline_label.setFixedWidth(96)
         self.timeline_label.setStyleSheet(
-            "color: #E2E8F0;"
+            f"color: {TEXT_PRIMARY};"
             "font-size: 12px;"
             "font-family: 'Consolas', monospace;"
             "font-weight: 600;"
@@ -212,24 +231,24 @@ class MainWindowPreviewMixin:
         self.speed_combo.setCurrentText("1.0x")
         self.speed_combo.setFixedWidth(64)
         self.speed_combo.setToolTip("Oynatma Hızı")
-        self.speed_combo.setStyleSheet("""
-            QComboBox {
+        self.speed_combo.setStyleSheet(f"""
+            QComboBox {{
                 background: transparent;
-                color: #94A3B8;
-                border: 1px solid #252F42;
+                color: {TEXT_MUTED};
+                border: 1px solid {BORDER};
                 border-radius: 4px;
                 padding: 2px 4px;
                 font-weight: 600;
                 font-size: 11px;
-            }
-            QComboBox:hover { border-color: #3B4F70; color: #CBD5E1; }
-            QComboBox::drop-down { border: none; width: 14px; }
-            QComboBox QAbstractItemView {
-                background: #111827;
-                color: #CBD5E1;
-                border: 1px solid #1E2840;
-                selection-background-color: #1E3A5F;
-            }
+            }}
+            QComboBox:hover {{ border-color: {ACCENT}; color: {TEXT_PRIMARY}; }}
+            QComboBox::drop-down {{ border: none; width: 14px; }}
+            QComboBox QAbstractItemView {{
+                background: {BG_PANEL};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                selection-background-color: {ACCENT_SELECTION};
+            }}
         """)
         self.speed_combo.currentTextChanged.connect(self._change_speed)
 
@@ -248,24 +267,24 @@ class MainWindowPreviewMixin:
         self.preview_format_combo.addItems(["16:9", "9:16", "1:1", "4:5"])
         self.preview_format_combo.setFixedWidth(58)
         self.preview_format_combo.setToolTip("En-Boy Oranı")
-        self.preview_format_combo.setStyleSheet("""
-            QComboBox {
+        self.preview_format_combo.setStyleSheet(f"""
+            QComboBox {{
                 background: transparent;
-                color: #94A3B8;
-                border: 1px solid #252F42;
+                color: {TEXT_MUTED};
+                border: 1px solid {BORDER};
                 border-radius: 4px;
                 padding: 2px 4px;
                 font-weight: 600;
                 font-size: 11px;
-            }
-            QComboBox:hover { border-color: #3B4F70; color: #CBD5E1; }
-            QComboBox::drop-down { border: none; width: 14px; }
-            QComboBox QAbstractItemView {
-                background: #111827;
-                color: #CBD5E1;
-                border: 1px solid #1E2840;
-                selection-background-color: #1E3A5F;
-            }
+            }}
+            QComboBox:hover {{ border-color: {ACCENT}; color: {TEXT_PRIMARY}; }}
+            QComboBox::drop-down {{ border: none; width: 14px; }}
+            QComboBox QAbstractItemView {{
+                background: {BG_PANEL};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                selection-background-color: {ACCENT_SELECTION};
+            }}
         """)
         self.preview_format_combo.currentTextChanged.connect(self._on_preview_format_changed)
         right_grp.addWidget(self.preview_format_combo)
@@ -278,22 +297,21 @@ class MainWindowPreviewMixin:
         right_grp.addWidget(make_divider(22))
 
         self.btn_export_mini = QPushButton("Dışa Aktar")
-        self.btn_export_mini.setIcon(qta.icon("mdi.export", color="#E2E8F0"))
+        self.btn_export_mini.setIcon(qta.icon("mdi.export", color=TEXT_ON_ACCENT))
         self.btn_export_mini.setIconSize(QSize(14, 14))
         self.btn_export_mini.setFixedHeight(30)
         self.btn_export_mini.setToolTip("Projeyi Dışa Aktar")
-        self.btn_export_mini.setStyleSheet("""
-            QPushButton {
-                background: #2563EB;
-                color: #F8FAFC;
-                border: none;
+        self.btn_export_mini.setStyleSheet(f"""
+            QPushButton {{
+                background: {BTN_PRIMARY_GRADIENT};
+                color: {TEXT_ON_ACCENT};
+                border: 1px solid {ACCENT_HOVER};
                 border-radius: 6px;
                 padding: 0px 12px;
                 font-weight: 600;
                 font-size: 11px;
-            }
-            QPushButton:hover { background: #1D4ED8; }
-            QPushButton:pressed { background: #1E40AF; }
+            }}
+            QPushButton:hover {{ background: {BTN_PRIMARY_HOVER}; }}
         """)
         self.btn_export_mini.clicked.connect(self._prepare_export)
         right_grp.addWidget(self.btn_export_mini)
@@ -335,23 +353,40 @@ class MainWindowPreviewMixin:
 
         self.subtitle_preview.setAlignment(qt_preview_alignment(position))
         markup = self._build_preview_markup(subtitle, active_index)
-        if self.subtitle_preview.text() != markup:
+        if markup != getattr(self, "_last_preview_markup", None):
             self.subtitle_preview.setText(markup)
-        else:
-            self.subtitle_preview.setText("")
-            self.subtitle_preview.setText(markup)
-        if hasattr(self, "preview_video_host"):
-            self.preview_video_host.update_subtitle_position(position)
-            self.preview_video_host.subtitle_proxy.update()
-        self.subtitle_preview.update()
-        self.subtitle_preview.setStyleSheet(
-            "QLabel {"
-            f"font-family: '{font_name}';"
-            f"font-size: {size}px;"
-            f"{preview_padding(position, shadow)}"
-            "background-color: transparent;"
-            "}"
+            self._last_preview_markup = markup
+
+        bg_box = (
+            self.bg_box_checkbox.isChecked()
+            if hasattr(self, "bg_box_checkbox")
+            else False
         )
+        style_key = (font_name, size, stroke, shadow, position, bg_box)
+        if style_key != getattr(self, "_last_preview_style_key", None):
+            if bg_box:
+                bg_style = (
+                    "background-color: rgba(0, 0, 0, 0.78);"
+                    "padding: 8px 16px;"
+                    "border-radius: 6px;"
+                )
+            else:
+                bg_style = "background-color: transparent;"
+            self.subtitle_preview.setStyleSheet(
+                "QLabel {"
+                f"font-family: '{font_name}';"
+                f"font-size: {size}px;"
+                f"{preview_padding(position, shadow)}"
+                f"{bg_style}"
+                "}"
+            )
+            self._last_preview_style_key = style_key
+
+        if position != getattr(self, "_last_preview_position", None):
+            self._last_preview_position = position
+            if hasattr(self, "preview_video_host"):
+                self.preview_video_host.update_subtitle_position(position)
+
         self.subtitle_preview.setToolTip(
             f"Font: {font_name} | Boyut: {size} | Stroke: {stroke} | Golge: {shadow}"
         )
@@ -382,7 +417,10 @@ class MainWindowPreviewMixin:
             return
         self._last_playback_pos_ms = position
         self.current_time_ms = position
-        self.timeline_panel.set_playhead(position, emit=False)
+        last_tl = getattr(self, "_last_timeline_sync_ms", -999)
+        if abs(position - last_tl) >= 33:
+            self._last_timeline_sync_ms = position
+            self.timeline_panel.set_playhead(position, emit=False, lightweight=True)
         self._refresh_preview()
 
     def _build_subtitle_info(self, subtitle, active_index: int | None) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.ui.app_theme import ACCENT_TEAL, BTN_PRIMARY_GRADIENT, TEXT_MUTED
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,13 +32,14 @@ class BatchExportDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Toplu Disa Aktar")
+        self.setWindowTitle("Toplu Dışa Aktar")
         self.resize(640, 480)
         self.request_template = request_template
         self.export_service = export_service
         self.batch_service = BatchExportService()
         self.thread_pool = QThreadPool()
         self.output_dir = str(Path.cwd() / "output" / "batch")
+        self._output_dir_customized = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -48,7 +50,7 @@ class BatchExportDialog(QDialog):
             f"{self.request_template.font_size}px | "
             f"{self.request_template.aspect_ratio}"
         )
-        style_info.setStyleSheet("color: #2DD4BF; font-weight: bold;")
+        style_info.setStyleSheet(f"color: {ACCENT_TEAL}; font-weight: bold;")
         layout.addWidget(style_info)
 
         group = QGroupBox("Video Listesi")
@@ -75,7 +77,7 @@ class BatchExportDialog(QDialog):
 
         out_row = QHBoxLayout()
         self.output_label = QLabel(self.output_dir)
-        self.output_label.setStyleSheet("color: #94A3B8;")
+        self.output_label.setStyleSheet(f"color: {TEXT_MUTED};")
         out_btn = QPushButton("Cikti Klasoru")
         out_btn.clicked.connect(self._pick_output_dir)
         out_row.addWidget(self.output_label, 1)
@@ -84,8 +86,8 @@ class BatchExportDialog(QDialog):
         layout.addWidget(options)
 
         footer = QHBoxLayout()
-        self.start_btn = QPushButton("Toplu Disa Aktar")
-        self.start_btn.setStyleSheet("background-color: #3B82F6; font-weight: bold;")
+        self.start_btn = QPushButton("Toplu Dışa Aktar")
+        self.start_btn.setStyleSheet(f"background: {BTN_PRIMARY_GRADIENT}; font-weight: bold;")
         self.start_btn.clicked.connect(self._start_batch)
         close_btn = QPushButton("Kapat")
         close_btn.clicked.connect(self.reject)
@@ -103,11 +105,15 @@ class BatchExportDialog(QDialog):
         )
         if files:
             self.video_list.addItems(files)
+            if not self._output_dir_customized:
+                self.output_dir = str(Path(files[0]).resolve().parent)
+                self.output_label.setText(self.output_dir)
 
     def _pick_output_dir(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Cikti Klasoru", self.output_dir)
         if folder:
             self.output_dir = folder
+            self._output_dir_customized = True
             self.output_label.setText(folder)
 
     def _start_batch(self) -> None:
@@ -136,7 +142,7 @@ class BatchExportDialog(QDialog):
                 return
 
         progress = QProgressDialog("Toplu islem basliyor...", None, 0, 100, self)
-        progress.setWindowTitle("Toplu Disa Aktar")
+        progress.setWindowTitle("Toplu Dışa Aktar")
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.show()
@@ -175,7 +181,7 @@ class BatchExportDialog(QDialog):
         lines = [f"Basarili: {ok}", f"Basarisiz: {fail}", ""]
         for item in results[:12]:
             status = "OK" if item.success else "HATA"
-            lines.append(f"[{status}] {Path(item.video_path).name} — {item.message}")
+            lines.append(f"[{status}] {Path(item.video_path).name} â€” {item.message}")
         QMessageBox.information(self, "Toplu Islem Ozeti", "\n".join(lines))
 
     def _on_batch_error(self, error_data: tuple) -> None:

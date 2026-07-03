@@ -70,6 +70,12 @@ QUALITY_PROFILES: dict[str, ExportQualityProfile] = {
 
 
 def unique_output_path(folder: Path, base_name: str, extension: str) -> Path:
+    """Cikti dosyasi icin benzersiz bir yol uretir.
+
+    Ayni isimde dosya zaten varsa (kullanici basligi degistirmediyse),
+    dosya adi "(1)", "(2)", ... seklinde otomatik artirilir; var olan
+    hicbir dosyanin uzerine yazilmaz.
+    """
     folder.mkdir(parents=True, exist_ok=True)
     clean = base_name.strip() or "cikti"
     ext = extension if extension.startswith(".") else f".{extension}"
@@ -78,7 +84,7 @@ def unique_output_path(folder: Path, base_name: str, extension: str) -> Path:
         return candidate
     index = 1
     while True:
-        numbered = folder / f"{clean}_{index}{ext}"
+        numbered = folder / f"{clean} ({index}){ext}"
         if not numbered.exists():
             return numbered
         index += 1

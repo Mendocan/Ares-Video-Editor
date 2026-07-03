@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui.app_theme import ACCENT_TEAL, BG_INPUT_DARK, BG_PREVIEW_VIDEO
+
 
 class PreviewVideoHost(QWidget):
     """QGraphicsVideoItem + QLabel proxy; Windows'ta QVideoWidget üstünde altyazı görünmez sorununu önler."""
@@ -30,7 +32,7 @@ class PreviewVideoHost(QWidget):
         self.graphics_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.graphics_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.graphics_view.setFrameShape(QFrame.Shape.NoFrame)
-        self.graphics_view.setStyleSheet("background: #000000;")
+        self.graphics_view.setStyleSheet(f"background: {BG_PREVIEW_VIDEO};")
         layout.addWidget(self.graphics_view)
 
         self.video_item = QGraphicsVideoItem()
@@ -137,11 +139,11 @@ class AudioVisualizer(QWidget):
                 by = h - bh
                 painter.fillRect(int(x), int(by), int(bar_w), int(bh), gradient)
 
-        painter.fillRect(int(lx), 0, int(bar_w), int(h), QColor("#1E293B"))
-        painter.fillRect(int(rx), 0, int(bar_w), int(h), QColor("#1E293B"))
+        painter.fillRect(int(lx), 0, int(bar_w), int(h), QColor(BG_INPUT_DARK))
+        painter.fillRect(int(rx), 0, int(bar_w), int(h), QColor(BG_INPUT_DARK))
 
         draw_bar(lx, self.l_val)
         draw_bar(rx, self.r_val)
 
 
-COLOR_PLAY_TEAL = "#2DD4BF"
+COLOR_PLAY_TEAL = ACCENT_TEAL

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.ui.app_theme import BTN_PRIMARY_GRADIENT, TEXT_MUTED
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
     QApplication,
@@ -65,7 +66,7 @@ class TranscriptionDialog(QDialog):
 
         header = QLabel(
             f"Video: <b>{Path(self.video_path).name}</b><br>"
-            "<span style='color:#94A3B8;'>faster-whisper ile kelime zamanlamali SRT uretilir.</span>"
+            f"<span style='color:{TEXT_MUTED};'>faster-whisper ile kelime zamanlamali SRT uretilir.</span>"
         )
         header.setWordWrap(True)
         layout.addWidget(header)
@@ -81,6 +82,7 @@ class TranscriptionDialog(QDialog):
         self.language_combo = QComboBox()
         for _code, label in LANGUAGE_OPTIONS:
             self.language_combo.addItem(label)
+        self.language_combo.setCurrentIndex(1)  # Turkce varsayilan
 
         self.translate_checkbox = QCheckBox("Ingilizceye cevir (translate)")
         self.translate_checkbox.setChecked(translate_default)
@@ -88,9 +90,16 @@ class TranscriptionDialog(QDialog):
             "Kaynak dili Ingilizceye cevirir. Aksi halde orijinal dilde yazar."
         )
 
+        self.music_checkbox = QCheckBox("Sarki / muzik videosu")
+        self.music_checkbox.setToolTip(
+            "Sarki ve muzik kliplerinde VAD kapatilir; Whisper tum sesi kesintisiz isler. "
+            "Konusma videolari icin isaretlemeyin."
+        )
+
         form.addRow("Model", self.model_combo)
         form.addRow("Dil", self.language_combo)
         form.addRow("", self.translate_checkbox)
+        form.addRow("", self.music_checkbox)
         layout.addWidget(settings)
 
         output_group = QGroupBox("Cikti")
@@ -105,7 +114,7 @@ class TranscriptionDialog(QDialog):
         layout.addWidget(output_group)
 
         self.status_label = QLabel("Hazir.")
-        self.status_label.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self.status_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -115,7 +124,7 @@ class TranscriptionDialog(QDialog):
 
         buttons = QDialogButtonBox()
         self.start_btn = QPushButton("Baslat")
-        self.start_btn.setStyleSheet("background-color: #3B82F6; font-weight: bold;")
+        self.start_btn.setStyleSheet(f"background: {BTN_PRIMARY_GRADIENT}; font-weight: bold;")
         self.start_btn.clicked.connect(self._start)
         close_btn = QPushButton("Kapat")
         close_btn.clicked.connect(self.reject)
@@ -138,6 +147,7 @@ class TranscriptionDialog(QDialog):
         self.model_combo.setEnabled(not busy)
         self.language_combo.setEnabled(not busy)
         self.translate_checkbox.setEnabled(not busy)
+        self.music_checkbox.setEnabled(not busy)
         self.output_input.setEnabled(not busy)
 
     def _start(self) -> None:
@@ -149,6 +159,17 @@ class TranscriptionDialog(QDialog):
         model_size = MODEL_OPTIONS[self.model_combo.currentIndex()][0]
         language = LANGUAGE_OPTIONS[self.language_combo.currentIndex()][0]
         translate = self.translate_checkbox.isChecked()
+        music_mode = self.music_checkbox.isChecked()
+
+        if music_mode and model_size == "tiny":
+            answer = QMessageBox.question(
+                self,
+                "Model Onerisi",
+                "Sarki/muzik videolari icin 'Small' veya 'Medium' model onerilir.\n"
+                "Tiny model ile devam edilsin mi?",
+            )
+            if answer != QMessageBox.Yes:
+                return
 
         self.transcription_service.configure(model_size=model_size)
         self._set_busy(True)
@@ -161,6 +182,7 @@ class TranscriptionDialog(QDialog):
             output_path,
             translate=translate,
             language=language or None,
+            music_mode=music_mode,
             progress_callback=lambda _msg: None,
         )
 

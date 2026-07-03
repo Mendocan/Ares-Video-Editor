@@ -34,6 +34,8 @@ def _clone_clip(clip: TimelineClip) -> TimelineClip:
             fade_in_ms=clip.effects.fade_in_ms,
             fade_out_ms=clip.effects.fade_out_ms,
             volume=clip.effects.volume,
+            transition_in=clip.effects.transition_in,
+            transition_duration_ms=clip.effects.transition_duration_ms,
         )
         if clip.effects
         else ClipEffects(),

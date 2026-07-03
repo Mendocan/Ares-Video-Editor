@@ -9,6 +9,7 @@ from app.core.word_timing import (
     TimedSubtitle,
     TimedWord,
     _ensure_first_word_capitalized,
+    align_words_to_entry_bounds,
     build_word_timings,
 )
 
@@ -123,7 +124,7 @@ def build_timed_subtitles(
             continue
 
         timed_words = _ensure_first_word_capitalized(timed_words)
-        timed.append(TimedSubtitle(entry=entry, words=timed_words))
+        timed.append(align_words_to_entry_bounds(TimedSubtitle(entry=entry, words=timed_words)))
 
     return timed
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLabel, QListWidget, QListWidgetItem, QVBoxLayout
 
+from app.ui.app_theme import TEXT_MUTED
+
 
 PREVIEW_PRESETS = [
     ("16:9 — YouTube / Yatay", "16:9"),
@@ -38,7 +40,7 @@ class PreviewSettingsDialog(QDialog):
             "• Ekran goruntusu: o anki kareyi JPG olarak kaydeder."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #94A3B8; font-size: 10px;")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
         layout.addWidget(hint)
 
         buttons = QDialogButtonBox()

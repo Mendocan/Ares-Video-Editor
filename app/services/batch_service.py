@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.export_presets import unique_output_path
 from app.core.subtitle_parser import parse_srt
 from app.core.word_timing_data import build_timed_subtitles, load_word_timing_document, word_timing_path_for_srt
 from app.services.export_service import ExportRequest, ExportService
@@ -48,7 +49,7 @@ class BatchExportService:
         for video_path in video_paths:
             video = Path(video_path)
             srt_path = self.find_srt_for_video(video_path) if auto_match_srt else None
-            output_path = str(out / f"{video.stem}_subtitled.mp4")
+            output_path = str(unique_output_path(out, f"{video.stem}_subtitled", ".mp4"))
             jobs.append(BatchJob(video_path=str(video), srt_path=srt_path, output_path=output_path))
         return jobs
 

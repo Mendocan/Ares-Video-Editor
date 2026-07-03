@@ -66,7 +66,7 @@ def build_word_timings(entries: list[SubtitleEntry]) -> list[TimedSubtitle]:
             cursor = word_end
 
         timed_words = _ensure_first_word_capitalized(timed_words)
-        timed_subtitles.append(TimedSubtitle(entry=entry, words=timed_words))
+        timed_subtitles.append(align_words_to_entry_bounds(TimedSubtitle(entry=entry, words=timed_words)))
 
     return timed_subtitles
 
@@ -94,13 +94,52 @@ def find_subtitle_at_time(subtitles: list[TimedSubtitle], current_ms: int) -> Ti
     return None
 
 
+def align_words_to_entry_bounds(subtitle: TimedSubtitle) -> TimedSubtitle:
+    """Kelime zamanlarini satir araligina hizalar; ilk kelime satir basinda aktif olur."""
+    words = subtitle.words
+    if not words:
+        return subtitle
+
+    line_start = subtitle.start_ms
+    line_end = subtitle.end_ms
+    aligned: list[TimedWord] = []
+
+    for index, word in enumerate(words):
+        start_ms = word.start_ms
+        end_ms = word.end_ms
+        if index == 0:
+            start_ms = min(start_ms, line_start)
+        if index == len(words) - 1:
+            end_ms = max(end_ms, line_end)
+        start_ms = max(line_start, min(start_ms, line_end - 1))
+        end_ms = max(start_ms + 1, min(end_ms, line_end))
+        aligned.append(
+            TimedWord(
+                text=word.text,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                index=index,
+            )
+        )
+
+    aligned = _ensure_first_word_capitalized(aligned)
+    return TimedSubtitle(entry=subtitle.entry, words=aligned)
+
+
 def find_active_word_index(subtitle: TimedSubtitle | None, current_ms: int) -> int | None:
     if subtitle is None or not subtitle.words:
+        return None
+
+    if current_ms < subtitle.start_ms or current_ms > subtitle.end_ms:
         return None
 
     for word in subtitle.words:
         if word.start_ms <= current_ms < word.end_ms:
             return word.index
+
+    # Satir yeni acildi, ilk kelime zamanlamasi henuz eslesmiyorsa
+    if current_ms <= subtitle.words[0].start_ms:
+        return 0
 
     return None
 
@@ -110,8 +149,9 @@ def ensure_subtitle_words(subtitles: list[TimedSubtitle]) -> list[TimedSubtitle]
     output: list[TimedSubtitle] = []
     for subtitle in subtitles:
         if subtitle.words:
-            output.append(subtitle)
+            output.append(align_words_to_entry_bounds(subtitle))
             continue
         rebuilt = build_word_timings([subtitle.entry])
-        output.append(rebuilt[0] if rebuilt else subtitle)
+        item = rebuilt[0] if rebuilt else subtitle
+        output.append(align_words_to_entry_bounds(item) if item.words else item)
     return output

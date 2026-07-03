@@ -7,10 +7,27 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QLabel, QScrollArea, QWidget, QSizePolicy
 
 from app.core.timeline import TRACK_AUDIO, TRACK_VIDEO
+from app.ui.app_theme import (
+    ACCENT,
+    BG_PRESSED,
+    BORDER_DARK,
+    COLOR_DANGER,
+    COLOR_PLAYHEAD,
+    COLOR_WARNING,
+    TEXT_ON_ACCENT,
+    TEXT_PRIMARY,
+    TL_BG_MINI,
+    TL_HEADER_GRAD_BOTTOM,
+    TL_HEADER_GRAD_TOP,
+    TL_SCROLL,
+    TL_STATUS,
+)
 from app.ui.timeline.theme import C_BORDER, C_PLAYHEAD, C_TEXT, C_TEXT_LT, TRACK_COLORS, TRACK_LABELS
 
 class TrackHeader(QWidget):
-    """Tek bir track'in sol header'ı (etiket + mute/solo)."""
+    """Tek bir track'in sol header'i (etiket + mute/solo)."""
+
+    track_clicked = Signal(str, bool)
 
     HEADER_WIDTH = 52
 
@@ -30,8 +47,8 @@ class TrackHeader(QWidget):
 
         # Background
         grad = QLinearGradient(0, 0, w, 0)
-        grad.setColorAt(0, QColor("#1A2235"))
-        grad.setColorAt(1, QColor("#141C2A"))
+        grad.setColorAt(0, QColor(TL_HEADER_GRAD_TOP))
+        grad.setColorAt(1, QColor(TL_HEADER_GRAD_BOTTOM))
         painter.fillRect(0, 0, w, h, grad)
 
         # Right border
@@ -55,21 +72,21 @@ class TrackHeader(QWidget):
         # Mute button (M)
         mx, my = 6, h // 2 + 2
         bw, bh = 17, 13
-        mute_color = QColor("#EF4444") if self._muted else QColor("#2A3550")
+        mute_color = QColor(COLOR_DANGER) if self._muted else QColor(BG_PRESSED)
         painter.setPen(Qt.NoPen)
         painter.setBrush(mute_color)
         painter.drawRoundedRect(mx, my, bw, bh, 3, 3)
-        painter.setPen(QColor("#F1F5F9") if self._muted else C_TEXT)
+        painter.setPen(QColor(TEXT_ON_ACCENT) if self._muted else C_TEXT)
         painter.setFont(QFont("Segoe UI", 6, QFont.Bold))
         painter.drawText(mx + 4, my + bh - 3, "M")
 
         # Solo button (S)
         sx2 = mx + bw + 4
-        solo_color = QColor("#EAB308") if self._solo else QColor("#2A3550")
+        solo_color = QColor(COLOR_WARNING) if self._solo else QColor(BG_PRESSED)
         painter.setPen(Qt.NoPen)
         painter.setBrush(solo_color)
         painter.drawRoundedRect(sx2, my, bw, bh, 3, 3)
-        painter.setPen(QColor("#1A1A1A") if self._solo else C_TEXT)
+        painter.setPen(QColor(TEXT_PRIMARY) if self._solo else C_TEXT)
         painter.setFont(QFont("Segoe UI", 6, QFont.Bold))
         painter.drawText(sx2 + 4, my + bh - 3, "S")
 
@@ -82,9 +99,13 @@ class TrackHeader(QWidget):
         if mx <= x <= mx + bw and my <= y <= my + bh:
             self._muted = not self._muted
             self.update()
-        elif sx2 <= x <= sx2 + bw and my <= y <= my + bh:
+            return
+        if sx2 <= x <= sx2 + bw and my <= y <= my + bh:
             self._solo = not self._solo
             self.update()
+            return
+        additive = bool(event.modifiers() & Qt.ControlModifier)
+        self.track_clicked.emit(self.track_type, additive)
 
 class MiniTimeline(QWidget):
     """Tüm timeline'ın küçük haritası; sürüklenebilir viewport penceresi."""
@@ -166,7 +187,7 @@ class MiniTimeline(QWidget):
         w, h = self.width(), self.height()
 
         # Background
-        painter.fillRect(0, 0, w, h, QColor("#0C1220"))
+        painter.fillRect(0, 0, w, h, QColor(TL_BG_MINI))
         painter.setPen(QPen(C_BORDER, 1))
         painter.drawLine(0, 0, w, 0)
 
@@ -189,13 +210,13 @@ class MiniTimeline(QWidget):
         x1 = self._n_to_x(self._view_start)
         x2 = self._n_to_x(self._view_end)
         vw = max(4, x2 - x1)
-        painter.fillRect(x1, 0, vw, h, QColor(255, 255, 255, 22))
-        painter.setPen(QPen(QColor(255, 255, 255, 90), 1))
+        painter.fillRect(x1, 0, vw, h, QColor(255, 255, 255, 40))
+        painter.setPen(QPen(QColor(60, 66, 74, 140), 1))
         painter.drawRect(x1, 0, vw - 1, h - 1)
 
         # Playhead
         px = self._n_to_x(self._playhead)
-        painter.setPen(QPen(QColor("#FF6A1A"), 2))
+        painter.setPen(QPen(QColor(COLOR_PLAYHEAD), 2))
         painter.drawLine(px, 0, px, h)
 
 
@@ -208,7 +229,7 @@ class TimecodeLabel(QLabel):
         super().__init__("00:00:00", parent)
         self.setFont(QFont("Consolas", 9))
         self.setStyleSheet(
-            "color: #E2E8F0;"
+            f"color: {TEXT_PRIMARY};"
             "background: transparent;"
             "border: none;"
             "padding: 0px 4px;"
@@ -236,28 +257,28 @@ class TimelineScrollArea(QScrollArea):
         super().__init__(parent)
         self._zoom_level: float = 1.0
         self.setStyleSheet(
-            "QScrollArea {"
-            "  background-color: #161D2B;"
-            "  border: none;"
-            "}"
-            "QScrollBar:horizontal {"
-            "  background: #0D1117;"
-            "  height: 8px;"
-            "  margin: 0px;"
-            "  border-radius: 4px;"
-            "}"
-            "QScrollBar::handle:horizontal {"
-            "  background: #2A3548;"
-            "  border-radius: 4px;"
-            "  min-width: 30px;"
-            "}"
-            "QScrollBar::handle:horizontal:hover {"
-            "  background: #3B4F70;"
-            "}"
-            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
-            "  width: 0px;"
-            "}"
-            "QScrollBar:vertical { width: 0px; }"
+            f"QScrollArea {{"
+            f"  background-color: {TL_SCROLL};"
+            f"  border: none;"
+            f"}}"
+            f"QScrollBar:horizontal {{"
+            f"  background: {TL_STATUS};"
+            f"  height: 8px;"
+            f"  margin: 0px;"
+            f"  border-radius: 4px;"
+            f"}}"
+            f"QScrollBar::handle:horizontal {{"
+            f"  background: {BORDER_DARK};"
+            f"  border-radius: 4px;"
+            f"  min-width: 30px;"
+            f"}}"
+            f"QScrollBar::handle:horizontal:hover {{"
+            f"  background: {ACCENT};"
+            f"}}"
+            f"QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{"
+            f"  width: 0px;"
+            f"}}"
+            f"QScrollBar:vertical {{ width: 0px; }}"
         )
         self.horizontalScrollBar().valueChanged.connect(lambda _: self.scroll_changed.emit())
 

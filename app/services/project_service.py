@@ -123,6 +123,8 @@ class ProjectService:
                 fade_in_ms=int(effects_data.get("fade_in_ms", 0)),
                 fade_out_ms=int(effects_data.get("fade_out_ms", 0)),
                 volume=float(effects_data.get("volume", 1.0)),
+                transition_in=str(effects_data.get("transition_in", "Yok")),
+                transition_duration_ms=int(effects_data.get("transition_duration_ms", 500)),
             )
             timeline_model.clips.append(
                 TimelineClip(
@@ -164,6 +166,10 @@ class ProjectService:
                         "fade_in_ms": clip.effects.fade_in_ms if clip.effects else 0,
                         "fade_out_ms": clip.effects.fade_out_ms if clip.effects else 0,
                         "volume": clip.effects.volume if clip.effects else 1.0,
+                        "transition_in": clip.effects.transition_in if clip.effects else "Yok",
+                        "transition_duration_ms": (
+                            clip.effects.transition_duration_ms if clip.effects else 500
+                        ),
                     },
                 }
                 for clip in model.clips

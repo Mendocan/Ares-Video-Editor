@@ -3,13 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Signal
 from PySide6.QtGui import (
     QColor, QPainter, QPen, QBrush, QFont, QPixmap, QLinearGradient, QCursor,
 )
 from PySide6.QtWidgets import QFrame, QLabel, QWidget
 
 from app.core.timeline import TRACK_AUDIO, TRACK_SUBTITLE, TRACK_VIDEO, TimelineClip
+from app.ui.app_theme import (
+    BORDER,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    TL_BG_TRACK,
+)
 from app.ui.timeline.theme import (
     C_ACCENT_A, C_ACCENT_S, C_ACCENT_V, C_SELECT, C_TEXT, C_TEXT_BRT, C_TEXT_LT, TRACK_COLORS,
 )
@@ -263,88 +269,6 @@ class ClipWidget(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TrackHeader — sol panel (V1 / A1 / S1)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TrackHeader(QWidget):
-    """Tek bir track'in sol header'ı (etiket + mute/solo)."""
-
-    HEADER_WIDTH = 52
-
-    def __init__(self, track_type: str, height: int, parent=None) -> None:
-        super().__init__(parent)
-        self.track_type = track_type
-        self.setFixedSize(self.HEADER_WIDTH, height)
-        self._muted  = False
-        self._solo   = False
-        accent = TRACK_COLORS.get(track_type, C_TEXT)
-        self._accent = accent
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-
-        # Background
-        grad = QLinearGradient(0, 0, w, 0)
-        grad.setColorAt(0, QColor("#1A2235"))
-        grad.setColorAt(1, QColor("#141C2A"))
-        painter.fillRect(0, 0, w, h, grad)
-
-        # Right border
-        painter.setPen(QPen(C_BORDER, 1))
-        painter.drawLine(w - 1, 0, w - 1, h)
-
-        # Bottom border
-        painter.setPen(QPen(C_BORDER, 1))
-        painter.drawLine(0, h - 1, w - 1, h - 1)
-
-        # Left accent stripe
-        painter.fillRect(0, 0, 3, h, self._accent)
-
-        # Track label
-        label = TRACK_LABELS.get(self.track_type, "?")
-        painter.setPen(C_TEXT_LT)
-        painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        fm = painter.fontMetrics()
-        painter.drawText((w - fm.horizontalAdvance(label)) // 2 + 2, h // 2 - 8, label)
-
-        # Mute button (M)
-        mx, my = 6, h // 2 + 2
-        bw, bh = 17, 13
-        mute_color = QColor("#EF4444") if self._muted else QColor("#2A3550")
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(mute_color)
-        painter.drawRoundedRect(mx, my, bw, bh, 3, 3)
-        painter.setPen(QColor("#F1F5F9") if self._muted else C_TEXT)
-        painter.setFont(QFont("Segoe UI", 6, QFont.Bold))
-        painter.drawText(mx + 4, my + bh - 3, "M")
-
-        # Solo button (S)
-        sx2 = mx + bw + 4
-        solo_color = QColor("#EAB308") if self._solo else QColor("#2A3550")
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(solo_color)
-        painter.drawRoundedRect(sx2, my, bw, bh, 3, 3)
-        painter.setPen(QColor("#1A1A1A") if self._solo else C_TEXT)
-        painter.setFont(QFont("Segoe UI", 6, QFont.Bold))
-        painter.drawText(sx2 + 4, my + bh - 3, "S")
-
-    def mousePressEvent(self, event) -> None:
-        w, h = self.width(), self.height()
-        bw, bh = 17, 13
-        mx, my = 6, h // 2 + 2
-        sx2 = mx + bw + 4
-        x, y = event.pos().x(), event.pos().y()
-        if mx <= x <= mx + bw and my <= y <= my + bh:
-            self._muted = not self._muted
-            self.update()
-        elif sx2 <= x <= sx2 + bw and my <= y <= my + bh:
-            self._solo = not self._solo
-            self.update()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # TrackWidget — clip sahası
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -372,11 +296,11 @@ class TrackWidget(QFrame):
         track_height = self.TRACK_HEIGHTS.get(track_type, 44)
         self.setFixedHeight(track_height)
         self.setStyleSheet(
-            "TrackWidget {"
-            "  background-color: #161D2B;"
-            "  border: none;"
-            "  border-bottom: 1px solid #1E2840;"
-            "}"
+            f"TrackWidget {{"
+            f"  background-color: {TL_BG_TRACK};"
+            f"  border: none;"
+            f"  border-bottom: 1px solid {BORDER};"
+            f"}}"
         )
         self.clip_widgets: dict[str, ClipWidget] = {}
         self._render_clips: list[TimelineClip] = []
@@ -387,7 +311,7 @@ class TrackWidget(QFrame):
         self.drop_hint.setText("Dosyaları buraya sürükleyin")
         self.drop_hint.setAlignment(Qt.AlignCenter)
         self.drop_hint.setStyleSheet(
-            "color: #3B4A6B; font-size: 11px; font-style: italic;"
+            f"color: {TEXT_MUTED}; font-size: 11px; font-style: italic;"
             "background: transparent; border: none;"
         )
         self.drop_hint.hide()
@@ -434,7 +358,7 @@ class TrackWidget(QFrame):
         painter = QPainter(self)
         w, h = self.width(), self.height()
         # Subtle alternating grid lines
-        painter.setPen(QPen(QColor("#1B2540"), 1))
+        painter.setPen(QPen(QColor(BORDER), 1))
         step_px = 100
         x = 0
         while x < w:

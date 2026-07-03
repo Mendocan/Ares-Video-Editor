@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer, QSize, QUrl, QPointF
@@ -35,7 +36,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QProgressDialog,
     QScrollArea,
     QSlider,
     QSpinBox,
@@ -55,7 +55,7 @@ import qtawesome as qta
 from app.core.edit_history import EditHistory, capture_snapshot, restore_snapshot
 from app.core.ffmpeg_paths import ensure_ffmpeg_on_path, ffmpeg_missing_message
 from app.core.media_probe import probe_media
-from app.core.timeline import TRACK_AUDIO, TRACK_VIDEO, TimelineModel
+from app.core.timeline import TRACK_AUDIO, TRACK_SUBTITLE, TRACK_VIDEO, TimelineModel
 from app.core.timeline_subtitles import (
     remap_subtitles_for_segments,
     ripple_delete_subtitles,
@@ -68,6 +68,7 @@ from app.ui.main_window_preview import MainWindowPreviewMixin
 from app.core.animation_presets import animation_from_legacy
 from app.core.style_presets import CUSTOM_PRESET_NAME, default_aspect_ratio_options, get_preset
 from app.core.subtitle_parser import parse_srt
+from app.core.transcription_quality import is_stub_subtitle, is_weak_transcription
 from app.core.word_timing_data import (
     WordTimingDocument,
     build_timed_subtitles,
@@ -84,10 +85,32 @@ from app.services.project_service import PROJECT_EXTENSION, ProjectService, Proj
 from app.services.transcription_service import TranscriptionResult, TranscriptionService
 from app.ui.batch_dialog import BatchExportDialog
 from app.ui.clip_effects_dialog import ClipEffectsDialog
+from app.ui.sfx_library_dialog import SfxLibraryDialog
 from app.ui.export_sound import ExportCompleteSound
 from app.ui.export_dialog import ExportDialog
+from app.ui.export_progress_dialog import ExportProgressDialog
 from app.ui.subtitle_editor import SubtitleEditorDialog
 from app.ui.transcription_dialog import TranscriptionDialog
+from app.ui.app_theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    ACCENT_TEAL,
+    BG_APP_GRADIENT,
+    BG_PANEL_DARK,
+    BORDER,
+    BORDER_DARK,
+    BORDER_LIGHT,
+    BTN_METALLIC_GRADIENT,
+    BTN_METALLIC_HOVER,
+    BTN_METALLIC_PRESSED,
+    COLOR_DANGER,
+    COLOR_INFO,
+    COLOR_SUCCESS,
+    COLOR_TRANSPORT,
+    COLOR_WARNING,
+    TEXT_ON_ACCENT,
+    TEXT_PRIMARY,
+)
 from app.ui.video_tools_dialog import VideoToolsDialog
 
 
@@ -120,6 +143,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.word_timing_doc: WordTimingDocument | None = None
         self.thread_pool = QThreadPool()
         self._export_complete_sound = ExportCompleteSound(self)
+        self._export_in_progress = False
 
         # Medya Oynatici (Gercek video onizlemesi)
         self.media_player = QMediaPlayer()
@@ -166,9 +190,11 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.timeline_panel = TimelinePanel(self.timeline_model)
         self.timeline_panel.split_requested.connect(self._split_at_playhead)
         self.timeline_panel.delete_requested.connect(self._delete_selected_clips)
+        self.timeline_panel.merge_requested.connect(self._merge_selected_clips)
         self.timeline_panel.add_media_requested.connect(self._add_media_to_timeline)
         self.timeline_panel.playhead_changed.connect(self._on_timeline_playhead)
         self.timeline_panel.clip_selected.connect(self._on_clip_selected)
+        self.timeline_panel.track_selected.connect(self._on_track_selected)
         self.timeline_panel.clip_moved.connect(self._on_clip_moved)
         self.timeline_panel.clip_drag_finished.connect(self._on_clip_drag_finished)
         self.timeline_panel.clip_trim_finished.connect(self._on_clip_trim_finished)
@@ -200,14 +226,16 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
 
     def _build_menu_bar(self) -> None:
         menubar = self.menuBar()
-        menubar.setStyleSheet("background-color: #0F172A; color: #F8FAFC;")
+        menubar.setStyleSheet(
+            f"background: {BG_APP_GRADIENT}; color: {TEXT_PRIMARY}; border-bottom: 1px solid {BORDER};"
+        )
         
         file_menu = menubar.addMenu("Dosya")
         edit_menu = menubar.addMenu("Düzenle")
         view_menu = menubar.addMenu("Oynat")
         settings_menu = menubar.addMenu("Ayarlar")
         export_menu = menubar.addMenu("Dışa Aktar")
-        batch_menu_action = QAction("Toplu Disa Aktar...", self)
+        batch_menu_action = QAction("Toplu Dışa Aktar...", self)
         batch_menu_action.triggered.connect(self._open_batch_export)
         export_menu.addAction(batch_menu_action)
 
@@ -247,83 +275,100 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
     def _build_tool_bar(self) -> None:
         toolbar = QToolBar("Ana Araçlar")
         toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(15, 15))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toolbar.setStyleSheet(
-            "QToolBar { background-color: #1E293B; border-bottom: 1px solid #334155; padding: 4px; } "
-            "QToolButton { color: #F8FAFC; font-weight: bold; font-size: 11px; padding: 4px 8px; border-radius: 4px; } "
-            "QToolButton:hover { background-color: #334155; }"
+            f"QToolBar {{"
+            f"  background: {BG_PANEL_DARK};"
+            f"  border-bottom: 1px solid {BORDER_DARK};"
+            f"  padding: 5px 6px;"
+            f"  spacing: 4px;"
+            f"}}"
+            f"QToolBar::separator {{"
+            f"  background: {BORDER_DARK};"
+            f"  width: 1px;"
+            f"  margin: 4px 6px;"
+            f"}}"
+            f"QToolButton {{"
+            f"  background: {BTN_METALLIC_GRADIENT};"
+            f"  color: {TEXT_PRIMARY};"
+            f"  font-weight: 600;"
+            f"  font-size: 11px;"
+            f"  padding: 6px 10px;"
+            f"  border: 1px solid {BORDER};"
+            f"  border-top: 1px solid {BORDER_LIGHT};"
+            f"  border-radius: 5px;"
+            f"}}"
+            f"QToolButton:hover {{"
+            f"  background: {BTN_METALLIC_HOVER};"
+            f"  border-color: {ACCENT};"
+            f"}}"
+            f"QToolButton:pressed {{"
+            f"  background: {BTN_METALLIC_PRESSED};"
+            f"  border-top: 1px solid {BORDER};"
+            f"}}"
+            f"QToolButton:disabled {{"
+            f"  color: {BORDER_DARK};"
+            f"  background: {BG_PANEL_DARK};"
+            f"  border-color: {BORDER};"
+            f"}}"
         )
         self.addToolBar(toolbar)
 
+        brand_box = QWidget()
+        brand_layout = QHBoxLayout(brand_box)
+        brand_layout.setContentsMargins(2, 0, 12, 0)
+        brand_layout.setSpacing(6)
+
+        brand_icon = QLabel()
+        brand_icon.setPixmap(qta.icon("fa5s.play-circle", color=ACCENT_TEAL).pixmap(QSize(18, 18)))
+        brand_layout.addWidget(brand_icon)
+
         brand = QLabel("ARES")
         brand.setStyleSheet(
-            "font-family: 'Michroma', 'Segoe UI', sans-serif; font-size: 10px; "
-            "color: #2DD4BF; letter-spacing: 3px; padding: 0 10px 0 4px;"
+            "font-family: 'Michroma', 'Segoe UI', sans-serif; font-size: 13px; font-weight: bold; "
+            f"color: {ACCENT_TEAL}; letter-spacing: 4px; background: transparent;"
         )
-        toolbar.addWidget(brand)
+        brand_layout.addWidget(brand)
+        toolbar.addWidget(brand_box)
         toolbar.addSeparator()
 
-        # Görseldeki gibi yan yana hızlı erişim butonları
-        import_action = QAction("➕ İçe Aktar", self)
-        import_action.triggered.connect(self._pick_timeline_video)
-        toolbar.addAction(import_action)
+        def add_tool_action(icon_name: str, text: str, callback, icon_color: str = TEXT_PRIMARY) -> QAction:
+            action = QAction(qta.icon(icon_name, color=icon_color), text, self)
+            action.triggered.connect(callback)
+            toolbar.addAction(action)
+            return action
 
-        open_project_action = QAction("📂 Proje Aç", self)
-        open_project_action.triggered.connect(self._open_project)
-        toolbar.addAction(open_project_action)
-
-        save_project_action = QAction("💾 Kaydet", self)
-        save_project_action.triggered.connect(self._save_project)
-        toolbar.addAction(save_project_action)
-
-        toolbar.addSeparator()
-
-        video_tools_action = QAction("✂ Video Kes/Birleştir", self)
-        video_tools_action.triggered.connect(self._open_video_tools)
-        toolbar.addAction(video_tools_action)
-
-        split_action = QAction("✂ Böl", self)
-        split_action.triggered.connect(self._split_at_playhead)
-        toolbar.addAction(split_action)
-
-        self.toolbar_undo = QAction("↩ Geri Al", self)
-        self.toolbar_undo.triggered.connect(self._undo)
-        toolbar.addAction(self.toolbar_undo)
-
-        self.toolbar_redo = QAction("↪ Yinele", self)
-        self.toolbar_redo.triggered.connect(self._redo)
-        toolbar.addAction(self.toolbar_redo)
+        add_tool_action("fa5s.file-import", " İçe Aktar", self._pick_timeline_video, COLOR_INFO)
+        add_tool_action("fa5s.folder-open", " Proje Aç", self._open_project, COLOR_WARNING)
+        add_tool_action("fa5s.save", " Kaydet", self._save_project, COLOR_SUCCESS)
 
         toolbar.addSeparator()
 
-        delete_action = QAction("🗑 Sil", self)
-        delete_action.triggered.connect(self._delete_selected_clips)
-        toolbar.addAction(delete_action)
-
-        add_media_action = QAction("➕ Şeride Ekle", self)
-        add_media_action.triggered.connect(self._add_media_to_timeline)
-        toolbar.addAction(add_media_action)
-
-        edit_subtitle_action = QAction("📝 Altyazı Düzenle", self)
-        edit_subtitle_action.triggered.connect(self._open_subtitle_editor)
-        toolbar.addAction(edit_subtitle_action)
-
-        translate_action = QAction("🌐 Whisper Çeviri", self)
-        translate_action.triggered.connect(lambda: self._run_transcription(translate=True))
-        toolbar.addAction(translate_action)
-        
-        denoise_action = QAction("🎧 Sesi Temizle", self)
-        denoise_action.triggered.connect(lambda: self.denoise_checkbox.setChecked(not self.denoise_checkbox.isChecked()))
-        toolbar.addAction(denoise_action)
+        add_tool_action("fa5s.layer-group", " Video Kes/Birleştir", self._open_video_tools, COLOR_INFO)
+        add_tool_action("fa5s.cut", " Böl", self._split_at_playhead, COLOR_DANGER)
+        self.toolbar_undo = add_tool_action("fa5s.undo", " Geri Al", self._undo, COLOR_TRANSPORT)
+        self.toolbar_redo = add_tool_action("fa5s.redo", " Yinele", self._redo, COLOR_TRANSPORT)
 
         toolbar.addSeparator()
 
-        batch_action = QAction("📦 Toplu İşlem", self)
-        batch_action.triggered.connect(self._open_batch_export)
-        toolbar.addAction(batch_action)
+        add_tool_action("fa5s.trash-alt", " Sil", self._delete_selected_clips, COLOR_DANGER)
+        add_tool_action("fa5s.object-group", " Birleştir", self._merge_selected_clips, ACCENT_TEAL)
+        add_tool_action("fa5s.plus-circle", " Şeride Ekle", self._add_media_to_timeline, COLOR_SUCCESS)
+        add_tool_action("fa5s.volume-up", " Ses Efektleri", self._open_sfx_library, COLOR_WARNING)
+        add_tool_action("fa5s.closed-captioning", " Altyazı Düzenle", self._open_subtitle_editor, "#5A4A8A")
+        add_tool_action("fa5s.language", " Whisper Çeviri", lambda: self._run_transcription(translate=True), COLOR_INFO)
+        add_tool_action(
+            "fa5s.broom",
+            " Sesi Temizle",
+            lambda: self.denoise_checkbox.setChecked(not self.denoise_checkbox.isChecked()),
+            COLOR_SUCCESS,
+        )
 
-        export_action = QAction("🚀 Dışa Aktar", self)
-        export_action.triggered.connect(self._prepare_export)
-        toolbar.addAction(export_action)
+        toolbar.addSeparator()
+
+        add_tool_action("fa5s.tasks", " Toplu İşlem", self._open_batch_export, COLOR_TRANSPORT)
+        add_tool_action("fa5s.file-export", " Dışa Aktar", self._prepare_export, ACCENT_TEAL)
 
     def _probe_duration_ms(self, file_path: str, use_player: bool = True) -> int:
         probe = probe_media(file_path)
@@ -447,6 +492,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             self.timeline_model.add_media_clip(file_path, at_ms=at_ms, duration_ms=duration_ms)
 
         self._sync_preview_video(file_path)
+        self._try_auto_load_subtitle_for_video(file_path, duration_ms)
 
         total = max(duration_ms, self.timeline_model.duration_ms)
         self.timeline_panel.configure_duration(total)
@@ -471,6 +517,23 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         QTimer.singleShot(100, self.timeline_panel.refresh)
         QTimer.singleShot(0, self._generate_instant_filmstrip)
         return True
+
+    def _try_auto_load_subtitle_for_video(self, video_path: str, duration_ms: int) -> None:
+        """Ayni klasordeki eslesen SRT varsa yukler; yetersiz/imza dosyalarini atlar."""
+        srt_path = Path(video_path).with_suffix(".srt")
+        if not srt_path.exists():
+            return
+
+        entries = parse_srt(str(srt_path))
+        probe_ms = duration_ms if duration_ms > 0 else self._probe_duration_ms(video_path, use_player=False)
+        if is_stub_subtitle(entries, probe_ms):
+            self.statusBar().showMessage(
+                f"Mevcut SRT yetersiz ({srt_path.name}). "
+                "Whisper ile yeniden uretin; sarki icin 'Sarki/muzik' secenegini isaretleyin."
+            )
+            return
+
+        self._load_subtitle(str(srt_path))
 
     def _generate_instant_filmstrip(self) -> None:
         """Import sonrasi filmstrip'i gecikmeden baslatir."""
@@ -749,6 +812,14 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.timeline_model.select_clip(clip_id, additive=additive)
         self.timeline_panel.refresh()
 
+    def _on_track_selected(self, track: str, additive: bool) -> None:
+        self.timeline_model.select_track(track, additive=additive)
+        self.timeline_panel.refresh()
+        labels = {TRACK_VIDEO: "Video (V1)", TRACK_AUDIO: "Ses (A1)", TRACK_SUBTITLE: "Altyazi (S1)"}
+        count = sum(1 for c in self.timeline_model.selected_clips() if c.track == track)
+        if count:
+            self.statusBar().showMessage(f"{labels.get(track, track)} seridi secildi ({count} klip).")
+
     def _split_at_playhead(self) -> None:
         split_time = self.current_time_ms
         if split_time <= 0:
@@ -771,31 +842,100 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.statusBar().showMessage(f"Klipler {self._format_ms(split_time)} konumunda bolundu.")
 
     def _delete_selected_clips(self) -> None:
-        removed = []
-        for clip in list(self.timeline_model.selected_clips()):
-            if clip.track in ("video", "audio"):
-                removed.append((clip.timeline_start_ms, clip.timeline_end_ms))
+        selected = list(self.timeline_model.selected_clips())
+        if not selected:
+            self.statusBar().showMessage("Silmek icin once bir klip secin (V1/A1/S1 veya serit basligi).")
+            return
+
+        removed_video_ranges: list[tuple[int, int]] = []
+        had_subtitle = any(c.track == TRACK_SUBTITLE for c in selected)
+        had_video = any(c.track == TRACK_VIDEO for c in selected)
+
+        for clip in selected:
+            if clip.track == TRACK_VIDEO:
+                removed_video_ranges.append((clip.timeline_start_ms, clip.timeline_end_ms))
 
         deleted = self.timeline_model.delete_selected()
         if deleted == 0:
-            self.statusBar().showMessage("Silmek icin once bir klip secin.")
             return
 
-        if self.timed_subtitles and removed:
-            for start_ms, end_ms in removed:
+        if self.timed_subtitles and removed_video_ranges:
+            for start_ms, end_ms in removed_video_ranges:
                 self.timed_subtitles = ripple_delete_subtitles(self.timed_subtitles, start_ms, end_ms)
             self.subtitle_entries = [ts.entry for ts in self.timed_subtitles]
             last_ms = self.timed_subtitles[-1].end_ms if self.timed_subtitles else 0
             self.timeline_model.replace_subtitle_span(last_ms)
             self._sync_word_timing_doc()
 
+        if had_subtitle and not self.timeline_model.clips_on_track(TRACK_SUBTITLE):
+            self.timed_subtitles = []
+            self.subtitle_entries = []
+            self.word_timing_doc = None
+            self._refresh_preview()
+            self._update_actions()
+
+        if had_video and not self.timeline_model.clips_on_track(TRACK_VIDEO):
+            self.video_path = None
+            self.video_input.setText("")
+            self.media_player.setSource(QUrl())
+            self._refresh_preview()
+            self._update_actions()
+
         self.timeline_panel.configure_duration(self.timeline_model.duration_ms)
+        self.timeline_panel.refresh()
         self._generate_thumbnails()
         self._commit_history()
-        self.statusBar().showMessage(f"{deleted} klip silindi.")
+
+        tracks = {TRACK_VIDEO: "video", TRACK_AUDIO: "ses", TRACK_SUBTITLE: "altyazi"}
+        removed_by_track: dict[str, int] = {}
+        for clip in selected:
+            removed_by_track[tracks.get(clip.track, clip.track)] = (
+                removed_by_track.get(tracks.get(clip.track, clip.track), 0) + 1
+            )
+        detail = ", ".join(f"{count} {name}" for name, count in removed_by_track.items())
+        self.statusBar().showMessage(f"Silindi: {detail}.")
+
+    def _merge_selected_clips(self) -> None:
+        merged = self.timeline_model.merge_selected()
+        if merged == 0:
+            self.statusBar().showMessage(
+                "Birlestirmek icin bitisik ve ayni kaynaktan iki (veya daha fazla) klip secin."
+            )
+            return
+
+        self.timeline_panel.refresh()
+        self._generate_thumbnails()
+        self._commit_history()
+        self.statusBar().showMessage(f"{merged} klip birlestirildi.")
 
     def _add_media_to_timeline(self) -> None:
         self._pick_timeline_video()
+
+    def _open_sfx_library(self) -> None:
+        dialog = SfxLibraryDialog(self)
+        dialog.add_to_timeline_requested.connect(self._add_sfx_to_timeline)
+        dialog.exec()
+
+    def _add_sfx_to_timeline(self, file_path: str) -> None:
+        duration_ms = self._probe_duration_ms(file_path, use_player=False)
+        if duration_ms <= 0:
+            QMessageBox.warning(
+                self,
+                "Ses Dosyasi Hatasi",
+                f"Ses dosyasi suresi okunamadi:\n{Path(file_path).name}",
+            )
+            return
+
+        at_ms = max(0, self.current_time_ms)
+        self.timeline_model.add_audio_clip(
+            file_path, at_ms=at_ms, duration_ms=duration_ms, label=Path(file_path).stem
+        )
+        self.timeline_panel.refresh()
+        self._generate_thumbnails()
+        self._commit_history()
+        self.statusBar().showMessage(
+            f"Ses efekti eklendi: {Path(file_path).name} ({self._format_ms(at_ms)})"
+        )
 
     def _sync_word_timing_doc(self) -> None:
         if not self.subtitle_entries:
@@ -1022,6 +1162,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
 
     def _build_export_request(self, output_path: str) -> ExportRequest:
         segments = self.timeline_model.video_segments_for_export()
+        audio_overlays = self.timeline_model.standalone_audio_segments_for_export()
         preview_height = 0
         if hasattr(self, "preview_video_host"):
             preview_height = max(self.preview_video_host.height(), 1)
@@ -1048,6 +1189,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             use_gpu=self.gpu_checkbox.isChecked(),
             bg_box=self.bg_box_checkbox.isChecked(),
             video_segments=segments,
+            audio_overlays=audio_overlays,
             preview_height_px=preview_height,
         )
 
@@ -1117,6 +1259,29 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.statusBar().showMessage(
             f"Otomatik altyazi: {len(self.subtitle_entries)} satir, {word_count} kelime zamanlamasi."
         )
+
+        duration_ms = self._probe_duration_ms(self.video_path or "", use_player=True)
+        total_chars = sum(len(entry.text) for entry in self.subtitle_entries)
+        duration_sec = max(0.1, duration_ms / 1000.0)
+        if is_stub_subtitle(self.subtitle_entries, duration_ms):
+            QMessageBox.warning(
+                self,
+                "Altyazi Sonucu Yetersiz",
+                "Whisper yalnizca kisa bir imza/jenerik satiri uretti (or. 'Altyazi M.K.').\n\n"
+                "Sarki veya muzik videolari icin:\n"
+                "  • 'Sarki / muzik videosu' secenegini isaretleyin\n"
+                "  • Model olarak Small veya Medium secin\n"
+                "  • Dil: Turkce\n\n"
+                "Sonra transkripsiyonu tekrar calistirin.",
+            )
+        elif is_weak_transcription(len(self.subtitle_entries), total_chars, duration_sec):
+            QMessageBox.information(
+                self,
+                "Altyazi Kalitesi",
+                "Uretilen altyazi videoya gore oldukca kisa gorunuyor.\n"
+                "Sarki/muzik ise 'Sarki / muzik videosu' secenegini deneyin; "
+                "daha buyuk bir Whisper modeli de yardimci olabilir.",
+            )
 
     def _on_transcription_error(self, error_data: tuple) -> None:
         _exc, trace = error_data
@@ -1265,7 +1430,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             or 0
         )
         default_title = Path(self.video_path).stem + ("_subtitled" if self.timed_subtitles else "_export")
-        default_folder = str(Path.cwd() / "output")
+        default_folder = str(Path(self.video_path).resolve().parent)
 
         dialog = ExportDialog(
             default_title=default_title,
@@ -1293,11 +1458,7 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
 
         export_subs = self._export_subtitles_for_timeline()
 
-        progress = QProgressDialog("Disa aktarim hazirlaniyor...", None, 0, 100, self)
-        progress.setWindowTitle("Disa Aktar")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
+        progress = ExportProgressDialog(self)
         progress.show()
 
         worker = Worker(
@@ -1309,66 +1470,138 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         )
 
         def on_progress(message: str) -> None:
+            if not getattr(self, "_export_in_progress", False):
+                return
             if "|" in message:
                 percent_str, label = message.split("|", 1)
                 try:
-                    progress.setValue(int(percent_str))
+                    progress.set_progress(int(percent_str), label)
                 except ValueError:
-                    pass
-                progress.setLabelText(label)
+                    progress.set_progress(progress.current_percent(), label)
             else:
-                progress.setLabelText(message)
+                progress.set_progress(progress.current_percent(), message)
 
         worker.signals.progress.connect(on_progress)
         worker.signals.result.connect(
-            lambda exported_path: self._on_export_success(progress, exported_path)
+            lambda exported_path: self._on_export_success(progress, exported_path),
+            Qt.ConnectionType.QueuedConnection,
         )
         worker.signals.error.connect(
-            lambda err: self._on_export_error(progress, err)
+            lambda err: self._on_export_error(progress, err),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker.signals.finished.connect(
+            lambda: self._on_export_worker_finished(progress),
+            Qt.ConnectionType.QueuedConnection,
         )
 
         self._export_progress = progress
+        self._export_in_progress = True
         self.export_button.setEnabled(False)
         self.btn_export_mini.setEnabled(False)
-        self.statusBar().showMessage("FFmpeg export basladi...")
+        self.statusBar().showMessage("FFmpeg dışa aktarımı başladı...")
         self.thread_pool.start(worker)
 
-    def _finish_export_progress(self, progress: QProgressDialog) -> None:
-        progress.hide()
-        progress.reset()
+    def _show_auto_message(
+        self,
+        title: str,
+        text: str,
+        *,
+        icon: QMessageBox.Icon = QMessageBox.Icon.Information,
+        dismiss_ms: int = 4500,
+    ) -> None:
+        """Kisa sure sonra kendiliginden kapanan bilgi/hata penceresi."""
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.setModal(False)
+        box.show()
+        QTimer.singleShot(dismiss_ms, box.close)
+        QTimer.singleShot(dismiss_ms + 200, box.deleteLater)
+
+    def _close_export_progress(
+        self,
+        progress: ExportProgressDialog | None,
+        on_closed: Callable[[], None] | None = None,
+    ) -> None:
+        if progress is None:
+            if on_closed:
+                on_closed()
+            return
         if getattr(self, "_export_progress", None) is progress:
             self._export_progress = None
-        progress.deleteLater()
+        try:
+            progress.close_now(on_closed)
+        except RuntimeError:
+            if on_closed:
+                on_closed()
 
-    def _on_export_success(self, progress: QProgressDialog, exported_path) -> None:
+    def _on_export_worker_finished(self, progress: ExportProgressDialog) -> None:
+        """Yedek: result/error handler calismazsa %98'de takili pencereyi kapat."""
+        if not getattr(self, "_export_in_progress", False):
+            return
+        if progress is None or not progress.isVisible():
+            return
+        self._export_in_progress = False
+        self.export_button.setEnabled(True)
+        self.btn_export_mini.setEnabled(True)
+        self.statusBar().showMessage("Dışa aktarım tamamlandı.")
+        QTimer.singleShot(0, lambda: self._close_export_progress(progress))
+
+    def _on_export_success(self, progress: ExportProgressDialog, exported_path) -> None:
+        if not getattr(self, "_export_in_progress", False):
+            return
+        self._export_in_progress = False
         self.export_button.setEnabled(True)
         self.btn_export_mini.setEnabled(True)
         path_str = str(exported_path)
+
+        def after_progress_closed() -> None:
+            self.statusBar().showMessage(f"Dışa aktarım tamamlandı: {path_str}")
+            try:
+                self._export_complete_sound.play()
+            except Exception:
+                pass
+            self._show_auto_message(
+                "Dışa Aktarım Tamamlandı",
+                f"Çıktı hazır:\n{path_str}",
+            )
+
         if progress is not None:
-            progress.setValue(100)
-            progress.setLabelText("Tamamlandi!")
-        self._export_complete_sound.play()
+            try:
+                progress.show_complete()
+            except RuntimeError:
+                after_progress_closed()
+                return
+            QTimer.singleShot(250, lambda: self._close_export_progress(progress, after_progress_closed))
+        else:
+            after_progress_closed()
 
-        def finalize() -> None:
-            if progress is not None:
-                self._finish_export_progress(progress)
-            QMessageBox.information(self, "Export Tamamlandi", f"Cikti hazir:\n{path_str}")
-            self.statusBar().showMessage(f"Export tamamlandi: {path_str}")
-
-        QTimer.singleShot(350, finalize)
-
-    def _on_export_error(self, progress: QProgressDialog, error_data: tuple) -> None:
+    def _on_export_error(self, progress: ExportProgressDialog, error_data: tuple) -> None:
+        self._export_in_progress = False
         self.export_button.setEnabled(True)
         self.btn_export_mini.setEnabled(True)
         _exc, trace = error_data
         if progress is not None:
-            self._finish_export_progress(progress)
-
-        def show_error() -> None:
-            QMessageBox.critical(self, "Export Hatasi", str(trace))
-            self.statusBar().showMessage("Export basarisiz oldu.")
-
-        QTimer.singleShot(0, show_error)
+            self._close_export_progress(
+                progress,
+                on_closed=lambda: self._show_auto_message(
+                    "Dışa Aktarım Hatası",
+                    str(trace),
+                    icon=QMessageBox.Icon.Critical,
+                    dismiss_ms=8000,
+                ),
+            )
+        else:
+            self._show_auto_message(
+                "Dışa Aktarım Hatası",
+                str(trace),
+                icon=QMessageBox.Icon.Critical,
+                dismiss_ms=8000,
+            )
+        self.statusBar().showMessage("Dışa aktarım başarısız oldu.")
 
     def _update_actions(self) -> None:
         self.transcribe_button.setEnabled(bool(self.video_path))

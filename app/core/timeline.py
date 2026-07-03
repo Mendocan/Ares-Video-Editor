@@ -94,10 +94,18 @@ class TimelineModel:
         clip = self.get_clip(clip_id)
         if clip:
             clip.selected = True
-            if clip.linked_clip_id:
-                linked = self.get_clip(clip.linked_clip_id)
-                if linked:
-                    linked.selected = True
+
+    def select_track(self, track: str, additive: bool = False) -> None:
+        """Bir track'teki tum klipleri secer (V1 / A1 / S1 basligi)."""
+        if not additive:
+            self.clear_selection()
+        for clip in self.clips_on_track(track):
+            clip.selected = True
+
+    def _break_links_to(self, removed_ids: set[str]) -> None:
+        for clip in self.clips:
+            if clip.linked_clip_id in removed_ids:
+                clip.linked_clip_id = None
 
     def _recalc_duration(self) -> None:
         if not self.clips:
@@ -154,6 +162,33 @@ class TimelineModel:
 
         self._recalc_duration()
         return video_clip
+
+    def add_audio_clip(
+        self,
+        source_path: str,
+        at_ms: int,
+        duration_ms: int,
+        label: str | None = None,
+    ) -> TimelineClip:
+        """Video ile eslesmemis, bagimsiz bir ses klibi (orn. ses efekti) ekler."""
+        path = Path(source_path).resolve()
+        display = label or path.stem
+        at_ms = max(0, at_ms)
+        end_ms = at_ms + max(1, duration_ms)
+
+        clip = TimelineClip(
+            clip_id=_new_id(),
+            track=TRACK_AUDIO,
+            label=display,
+            timeline_start_ms=at_ms,
+            timeline_end_ms=end_ms,
+            source_path=str(path),
+            source_start_ms=0,
+            source_end_ms=duration_ms,
+        )
+        self.clips.append(clip)
+        self._recalc_duration()
+        return clip
 
     def add_subtitle_clip(self, duration_ms: int, label: str = "Altyazı") -> TimelineClip:
         """Altyazı track'ine görsel klip ekler."""
@@ -245,25 +280,7 @@ class TimelineModel:
 
             clip.timeline_end_ms = time_ms
             clip.source_end_ms = source_split
-
-            if clip.linked_clip_id:
-                linked = self.get_clip(clip.linked_clip_id)
-                if linked and linked.contains_time(time_ms):
-                    linked.timeline_end_ms = time_ms
-                    linked.source_end_ms = source_split
-                    right_linked = TimelineClip(
-                        clip_id=_new_id(),
-                        track=linked.track,
-                        label=linked.label,
-                        timeline_start_ms=time_ms,
-                        timeline_end_ms=right_clip.timeline_end_ms,
-                        source_path=linked.source_path,
-                        source_start_ms=source_split,
-                        source_end_ms=right_clip.resolved_source_end_ms,
-                        linked_clip_id=right_clip.clip_id,
-                    )
-                    right_clip.linked_clip_id = right_linked.clip_id
-                    new_clips.append(right_linked)
+            clip.linked_clip_id = None
 
             new_clips.append(right_clip)
             split_count += 1
@@ -273,21 +290,13 @@ class TimelineModel:
         return split_count
 
     def delete_selected(self, ripple: bool | None = None) -> int:
-        """Seçili klipleri siler. Ripple modda sonrakiler sola kayar."""
-        to_remove = self.selected_clips()
+        """Secili klipleri siler. Yalnizca secilen track'ler etkilenir; bagli klip otomatik silinmez."""
+        to_remove = list(self.selected_clips())
         if not to_remove:
             return 0
 
         use_ripple = self.edit_mode == EDIT_MODE_RIPPLE if ripple is None else ripple
-
         remove_ids = {c.clip_id for c in to_remove}
-        for clip in to_remove:
-            if clip.linked_clip_id and clip.linked_clip_id not in remove_ids:
-                linked = self.get_clip(clip.linked_clip_id)
-                if linked:
-                    to_remove.append(linked)
-                    remove_ids.add(linked.clip_id)
-
         removed = sorted(to_remove, key=lambda c: c.timeline_start_ms)
 
         for clip in removed:
@@ -295,12 +304,58 @@ class TimelineModel:
             self.clips.remove(clip)
             if use_ripple:
                 for other in self.clips:
-                    if other.timeline_start_ms >= clip.timeline_end_ms:
+                    if other.track == clip.track and other.timeline_start_ms >= clip.timeline_end_ms:
                         other.timeline_start_ms -= gap
                         other.timeline_end_ms -= gap
 
+        self._break_links_to(remove_ids)
         self._recalc_duration()
         return len(removed)
+
+    def merge_selected(self) -> int:
+        """Bitişik, aynı kaynaktan ve aynı track'teki seçili klipleri tek klipte birleştirir.
+
+        Genellikle bir "Böl" işlemini geri almak için kullanılır. Kaynakları
+        farklı ya da aralarında boşluk olan klipler birleştirilmez.
+        Birleştirilen klip çifti sayısını döner.
+        """
+        selected = [c for c in self.selected_clips()]
+        if len(selected) < 2:
+            return 0
+
+        by_track: dict[str, list[TimelineClip]] = {}
+        for clip in selected:
+            by_track.setdefault(clip.track, []).append(clip)
+
+        merged_count = 0
+        for clips in by_track.values():
+            clips.sort(key=lambda c: c.timeline_start_ms)
+            i = 0
+            while i < len(clips) - 1:
+                a, b = clips[i], clips[i + 1]
+                mergeable = (
+                    a.source_path is not None
+                    and a.source_path == b.source_path
+                    and a.timeline_end_ms == b.timeline_start_ms
+                    and a.resolved_source_end_ms == b.source_start_ms
+                )
+                if mergeable:
+                    a.timeline_end_ms = b.timeline_end_ms
+                    a.source_end_ms = b.resolved_source_end_ms
+                    a.selected = True
+                    if b in self.clips:
+                        self.clips.remove(b)
+                    if b.linked_clip_id and a.linked_clip_id != b.linked_clip_id:
+                        linked = self.get_clip(b.linked_clip_id)
+                        if linked:
+                            linked.linked_clip_id = a.linked_clip_id
+                    clips.pop(i + 1)
+                    merged_count += 1
+                else:
+                    i += 1
+
+        self._recalc_duration()
+        return merged_count
 
     def trim_clip(
         self,
@@ -350,14 +405,6 @@ class TimelineModel:
                             other.timeline_start_ms -= shrink
                             other.timeline_end_ms -= shrink
 
-        if clip.linked_clip_id:
-            linked = self.get_clip(clip.linked_clip_id)
-            if linked:
-                linked.timeline_start_ms = clip.timeline_start_ms
-                linked.timeline_end_ms = clip.timeline_end_ms
-                linked.source_start_ms = clip.source_start_ms
-                linked.source_end_ms = clip.source_end_ms
-
         self._recalc_duration()
         return True
 
@@ -370,12 +417,6 @@ class TimelineModel:
         duration = clip.duration_ms
         clip.timeline_start_ms = new_start_ms
         clip.timeline_end_ms = new_start_ms + duration
-
-        if clip.linked_clip_id:
-            linked = self.get_clip(clip.linked_clip_id)
-            if linked:
-                linked.timeline_start_ms = clip.timeline_start_ms
-                linked.timeline_end_ms = clip.timeline_end_ms
 
         self._recalc_duration()
 
@@ -396,6 +437,27 @@ class TimelineModel:
             )
         return segments
 
+    def standalone_audio_segments_for_export(self) -> list[tuple[str, int, int, int]]:
+        """Videoya bagli olmayan (orn. eklenen ses efekti) klipleri dondurur.
+
+        Donus: (kaynak_yolu, source_start_ms, source_end_ms, timeline_start_ms).
+        Bir video klibine bagli (linked_clip_id'li) ses klipleri video dosyasinin
+        kendi ses izi zaten export'a dahil oldugu icin burada tekrar sayilmaz.
+        """
+        segments: list[tuple[str, int, int, int]] = []
+        for clip in self.clips_on_track(TRACK_AUDIO):
+            if not clip.source_path or clip.linked_clip_id:
+                continue
+            segments.append(
+                (
+                    clip.source_path,
+                    clip.source_start_ms,
+                    clip.resolved_source_end_ms,
+                    clip.timeline_start_ms,
+                )
+            )
+        return segments
+
     def apply_effects_to_selected(self, effects: ClipEffects) -> int:
         """Secili video/ses kliplerine efekt uygular."""
         updated = 0
@@ -407,6 +469,8 @@ class TimelineModel:
                 fade_in_ms=effects.fade_in_ms,
                 fade_out_ms=effects.fade_out_ms,
                 volume=effects.volume,
+                transition_in=effects.transition_in,
+                transition_duration_ms=effects.transition_duration_ms,
             )
             updated += 1
         return updated

@@ -3,7 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from app.ui.app_theme import (
+    BTN_PRIMARY_GRADIENT,
+    EXPORT_COMPACT_BTN_QSS,
+    QUALITY_RADIO_QSS,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+)
+from app.ui.dialog_chrome import apply_frameless_chrome
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -52,21 +59,23 @@ class ExportDialogResult:
 class ExportAdvancedDialog(QDialog):
     def __init__(self, fps: str, audio_bitrate: str, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Disari Aktarma Ayarlari")
-        self.resize(380, 220)
-        layout = QFormLayout(self)
+        self.resize(340, 180)
+        content = apply_frameless_chrome(self, "Gelişmiş Dışa Aktarma Ayarları")
+        layout = QFormLayout()
+        layout.setSpacing(8)
         self.fps_combo = QComboBox()
         self.fps_combo.addItems(FPS_OPTIONS)
         self.fps_combo.setCurrentText(fps)
         self.audio_combo = QComboBox()
         self.audio_combo.addItems(["128k", "192k", "256k", "320k"])
         self.audio_combo.setCurrentText(audio_bitrate.replace("Orijinal", "192k"))
-        layout.addRow("Cekim hizi (FPS)", self.fps_combo)
-        layout.addRow("Ses bit hizi", self.audio_combo)
+        layout.addRow("Çekim hızı (FPS)", self.fps_combo)
+        layout.addRow("Ses bit hızı", self.audio_combo)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        content.addLayout(layout)
 
     def values(self) -> tuple[str, str]:
         return self.fps_combo.currentText(), self.audio_combo.currentText()
@@ -87,15 +96,16 @@ class ExportDialog(QDialog):
         self.result_data: ExportDialogResult | None = None
         self._advanced_fps = current_fps
         self._advanced_audio = "192k"
-        self.setWindowTitle("Disa Aktar")
-        self.resize(760, 520)
+        self.resize(620, 400)
         self._build_ui(default_title, default_folder, current_aspect, current_fps)
 
     def _build_ui(self, default_title: str, default_folder: str, aspect: str, fps: str) -> None:
-        root = QHBoxLayout(self)
+        content = apply_frameless_chrome(self, "Dışa Aktar")
+        root = QHBoxLayout()
+        content.addLayout(root)
 
         left = QVBoxLayout()
-        left.addWidget(QLabel("Cikti bicimi"))
+        left.addWidget(QLabel("Çıktı biçimi"))
         self.format_list = QListWidget()
         for fmt in EXPORT_FORMATS:
             item = QListWidgetItem(fmt)
@@ -106,25 +116,38 @@ class ExportDialog(QDialog):
         root.addLayout(left, 1)
 
         right = QVBoxLayout()
+        right.setSpacing(10)
         header = QLabel("Videoyu bilgisayara kaydedin")
         header.setStyleSheet("font-weight: bold; font-size: 12px;")
         right.addWidget(header)
 
         form = QFormLayout()
+        form.setSpacing(8)
         self.title_input = QLineEdit(default_title)
-        form.addRow("Baslik", self.title_input)
+        form.addRow("Başlık", self.title_input)
 
         path_row = QHBoxLayout()
         self.folder_input = QLineEdit(default_folder)
-        browse = QPushButton("Goz at")
+        browse = QPushButton("Gözat")
+        browse.setStyleSheet(EXPORT_COMPACT_BTN_QSS)
         browse.clicked.connect(self._pick_folder)
         path_row.addWidget(self.folder_input, 1)
         path_row.addWidget(browse)
-        form.addRow("Kayit hedefi", path_row)
+        form.addRow("Kayıt yeri", path_row)
+
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItems(RESOLUTION_PRESETS)
+        if aspect in RESOLUTION_PRESETS:
+            self.resolution_combo.setCurrentText(aspect)
+        self.resolution_combo.currentTextChanged.connect(self._update_stats)
+        form.addRow("Çözünürlük", self.resolution_combo)
         right.addLayout(form)
 
         quality_group = QGroupBox("Kalite")
+        quality_group.setStyleSheet(QUALITY_RADIO_QSS)
         q_layout = QVBoxLayout(quality_group)
+        q_layout.setSpacing(2)
+        q_layout.setContentsMargins(6, 8, 6, 6)
         self.quality_buttons: dict[str, QRadioButton] = {}
         self.quality_group = QButtonGroup(self)
         for index, name in enumerate(QUALITY_OPTIONS):
@@ -136,46 +159,38 @@ class ExportDialog(QDialog):
             q_layout.addWidget(radio)
         self.quality_desc = QLabel(QUALITY_PROFILES[QUALITY_GOOD].description)
         self.quality_desc.setWordWrap(True)
-        self.quality_desc.setStyleSheet("color: #94A3B8; font-size: 10px;")
+        self.quality_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; padding: 2px 4px;")
         q_layout.addWidget(self.quality_desc)
         for radio in self.quality_buttons.values():
             radio.toggled.connect(self._on_quality_changed)
         right.addWidget(quality_group)
 
-        opts = QFormLayout()
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(RESOLUTION_PRESETS)
-        if aspect in RESOLUTION_PRESETS:
-            self.resolution_combo.setCurrentText(aspect)
-        self.resolution_combo.currentTextChanged.connect(self._update_stats)
-        opts.addRow("Cozunurluk", self.resolution_combo)
-        right.addLayout(opts)
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        right.addWidget(self.stats_label)
 
-        stats = QFormLayout()
-        self.duration_label = QLabel(self._format_duration())
-        self.size_label = QLabel("-")
-        self.resolution_label = QLabel("-")
-        stats.addRow("Sure", self.duration_label)
-        stats.addRow("Dosya boyutu (tahmini)", self.size_label)
-        stats.addRow("Cikis cozunurlugu", self.resolution_label)
-        right.addLayout(stats)
+        right.addStretch(1)
 
         adv_row = QHBoxLayout()
-        adv_row.addStretch(1)
-        adv_btn = QPushButton("Gelistirilmis...")
+        adv_btn = QPushButton("Gelişmiş ayarlar...")
+        adv_btn.setStyleSheet(EXPORT_COMPACT_BTN_QSS)
         adv_btn.clicked.connect(self._open_advanced)
         adv_row.addWidget(adv_btn)
-        right.addLayout(adv_row)
-
-        buttons = QDialogButtonBox()
-        cancel = QPushButton("Iptal")
+        adv_row.addStretch(1)
+        cancel = QPushButton("İptal")
+        start = QPushButton("Başlat")
+        compact = (
+            EXPORT_COMPACT_BTN_QSS
+            + f"QPushButton#exportStart {{ background: {BTN_PRIMARY_GRADIENT}; color: {TEXT_PRIMARY}; }}"
+        )
+        cancel.setStyleSheet(compact)
+        start.setObjectName("exportStart")
+        start.setStyleSheet(compact)
         cancel.clicked.connect(self.reject)
-        start = QPushButton("Baslat")
-        start.setStyleSheet("background-color: #F8FAFC; color: #0F172A; font-weight: bold; padding: 8px 20px;")
         start.clicked.connect(self._accept_export)
-        buttons.addButton(cancel, QDialogButtonBox.RejectRole)
-        buttons.addButton(start, QDialogButtonBox.AcceptRole)
-        right.addWidget(buttons)
+        adv_row.addWidget(cancel)
+        adv_row.addWidget(start)
+        right.addLayout(adv_row)
 
         root.addLayout(right, 3)
         self._update_stats()
@@ -190,7 +205,7 @@ class ExportDialog(QDialog):
         return f"{m:02d}:{s:02d}"
 
     def _pick_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Cikti Klasoru", self.folder_input.text())
+        folder = QFileDialog.getExistingDirectory(self, "Çıktı Klasörü", self.folder_input.text())
         if folder:
             self.folder_input.setText(folder)
 
@@ -213,15 +228,17 @@ class ExportDialog(QDialog):
             self._advanced_fps, self._advanced_audio = dialog.values()
 
     def _update_stats(self, *_args) -> None:
-        self.duration_label.setText(self._format_duration())
         quality = self._current_quality()
         sec = max(1.0, self.duration_ms / 1000.0)
         low, high = estimate_size_mb(sec, quality)
-        self.size_label.setText(f"{low} MB - {high} MB")
         from app.core.video_presets import play_resolution
 
         res_x, res_y = play_resolution(self.resolution_combo.currentText())
-        self.resolution_label.setText(f"{res_x} x {res_y}")
+        self.stats_label.setText(
+            f"Süre: {self._format_duration()}   •   "
+            f"Tahmini boyut: {low}-{high} MB   •   "
+            f"Çıkış: {res_x}x{res_y}"
+        )
 
     def _accept_export(self) -> None:
         title = self.title_input.text().strip() or "cikti"

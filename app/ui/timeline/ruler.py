@@ -6,10 +6,11 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from app.ui.app_theme import COLOR_PLAYHEAD, TEXT_PRIMARY, TL_RULER_BOTTOM, TL_RULER_TOP
 from app.ui.timeline.theme import C_BORDER, C_TEXT, C_TICK_MAJ, C_TICK_MIN
 
 # Movavi tarzı playhead sabitleri
-PLAYHEAD_LINE_COLOR = QColor("#FF6A1A")
+PLAYHEAD_LINE_COLOR = QColor(COLOR_PLAYHEAD)
 PLAYHEAD_HIT_HALF = 9          # Sürükleme alanı ±9px (toplam 18px)
 PLAYHEAD_LINE_WIDTH = 2
 PLAYHEAD_HANDLE_HALF_W = 8     # Üçgen yarı genişlik
@@ -55,11 +56,24 @@ class TimeRuler(QWidget):
         self.setMouseTracking(True)
 
     def configure(self, duration_ms: int, px_per_ms: float, playhead_ms: int) -> None:
+        old_px = int(self.playhead_ms * self.px_per_ms) if self.px_per_ms > 0 else -1
+        layout_changed = (
+            self.duration_ms != duration_ms
+            or abs(self.px_per_ms - px_per_ms) > 1e-9
+        )
         self.duration_ms = duration_ms
         self.px_per_ms = px_per_ms
         self.playhead_ms = playhead_ms
         self.setMinimumWidth(max(100, int(duration_ms * px_per_ms)))
-        self.update()
+        new_px = int(self.playhead_ms * self.px_per_ms)
+        if layout_changed:
+            self.update()
+        elif old_px != new_px:
+            margin = PLAYHEAD_HIT_HALF + 6
+            h = self.height()
+            for px in (old_px, new_px):
+                if px >= 0:
+                    self.update(max(0, px - margin), 0, margin * 2 + 1, h)
 
     def _playhead_px(self) -> int:
         return int(self.playhead_ms * self.px_per_ms)
@@ -110,8 +124,8 @@ class TimeRuler(QWidget):
         w, h = self.width(), self.height()
 
         grad = QLinearGradient(0, 0, 0, h)
-        grad.setColorAt(0.0, QColor("#1A2235"))
-        grad.setColorAt(1.0, QColor("#111827"))
+        grad.setColorAt(0.0, QColor(TL_RULER_TOP))
+        grad.setColorAt(1.0, QColor(TL_RULER_BOTTOM))
         painter.fillRect(0, 0, w, h, grad)
 
         painter.setPen(QPen(C_BORDER, 1))
@@ -138,7 +152,7 @@ class TimeRuler(QWidget):
             x = int(ms * self.px_per_ms)
             painter.setPen(QPen(C_TICK_MAJ, 1))
             painter.drawLine(x, h - 14, x, h - 1)
-            painter.setPen(QColor("#CBD5E1"))
+            painter.setPen(QColor(TEXT_PRIMARY))
             painter.drawText(x + 3, h - 16, self._format_ms(ms))
             ms += step_ms
 
@@ -239,7 +253,6 @@ class TimelineContainer(QWidget):
         if duration_ms > 0:
             self.duration_ms = duration_ms
         self._position_scrubber()
-        self.update()
 
     def _position_scrubber(self) -> None:
         if self.px_per_ms <= 0 or self.height() <= self.ruler_height:

@@ -15,6 +15,16 @@ from app.core.word_timing_data import (
 )
 from app.core.subtitle_text import capitalize_subtitle_text, capitalize_word_start
 
+# Whisper bazen sarki satirlarina muzik emojisi ekler.
+_MUSIC_MARKERS = ("\U0001f3b5", "\U0001f3b6", "\u266a", "\u266b")
+
+
+def _clean_transcribed_text(text: str) -> str:
+    cleaned = text.strip()
+    for marker in _MUSIC_MARKERS:
+        cleaned = cleaned.replace(marker, "")
+    return cleaned.strip()
+
 
 @dataclass(slots=True)
 class TranscriptionResult:
@@ -51,6 +61,7 @@ class TranscriptionService:
         output_srt_path: str,
         translate: bool = False,
         language: str | None = None,
+        music_mode: bool = False,
         progress_callback: Callable[[str], None] | None = None,
     ) -> TranscriptionResult:
         if not Path(video_path).exists():
@@ -63,6 +74,11 @@ class TranscriptionService:
         transcribe_kwargs: dict = {"word_timestamps": True, "task": task_name}
         if language:
             transcribe_kwargs["language"] = language
+        if music_mode:
+            # Sarki / muzik videolarinda VAD konusma dilimlerini keser; kapali mod
+            # tum sesi tek parca olarak isler ve daha iyi sonuc verir.
+            transcribe_kwargs["vad_filter"] = False
+            transcribe_kwargs["condition_on_previous_text"] = False
 
         segments, info = model.transcribe(video_path, **transcribe_kwargs)
         duration = float(getattr(info, "duration", 0) or 0)
@@ -76,7 +92,7 @@ class TranscriptionService:
             for index, segment in enumerate(segments, start=1):
                 start_time = self._format_timestamp(segment.start)
                 end_time = self._format_timestamp(segment.end)
-                text = capitalize_subtitle_text(segment.text.strip())
+                text = capitalize_subtitle_text(_clean_transcribed_text(segment.text))
 
                 handle.write(f"{index}\n")
                 handle.write(f"{start_time} --> {end_time}\n")
@@ -85,7 +101,7 @@ class TranscriptionService:
                 words: list[dict[str, int | str]] = []
                 if segment.words:
                     for word in segment.words:
-                        token = word.word.strip()
+                        token = _clean_transcribed_text(word.word)
                         if not token:
                             continue
                         words.append(

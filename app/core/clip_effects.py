@@ -2,6 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# FFmpeg'in yerlesik `xfade` filtresindeki gecis efektleri (ek bagimlilik gerektirmez).
+# Anahtar: arayuzde gosterilen Turkce isim, deger: ffmpeg xfade transition adi.
+TRANSITION_NONE = "Yok"
+XFADE_TRANSITIONS: dict[str, str] = {
+    TRANSITION_NONE: "",
+    "Capraz Gecis (Fade)": "fade",
+    "Siyaha Sonme": "fadeblack",
+    "Beyaza Sonme": "fadewhite",
+    "Erime (Dissolve)": "dissolve",
+    "Sola Kaydir": "slideleft",
+    "Saga Kaydir": "slideright",
+    "Yukari Kaydir": "slideup",
+    "Asagi Kaydir": "slidedown",
+    "Sola Sil (Wipe)": "wipeleft",
+    "Saga Sil (Wipe)": "wiperight",
+    "Daire Ac": "circleopen",
+    "Daire Kapat": "circleclose",
+    "Dikey Ac": "vertopen",
+    "Yatay Ac": "horzopen",
+    "Yakinlastir (Zoom)": "zoomin",
+    "Piksellestir": "pixelize",
+    "Bulanik Gecis": "hblur",
+}
+
 
 @dataclass(slots=True)
 class ClipEffects:
@@ -9,12 +33,20 @@ class ClipEffects:
     fade_in_ms: int = 0
     fade_out_ms: int = 0
     volume: float = 1.0
+    transition_in: str = TRANSITION_NONE
+    transition_duration_ms: int = 500
 
     def has_video_filters(self) -> bool:
         return self.speed != 1.0 or self.fade_in_ms > 0 or self.fade_out_ms > 0
 
     def has_audio_filters(self) -> bool:
         return self.speed != 1.0 or abs(self.volume - 1.0) > 0.01 or self.fade_in_ms > 0 or self.fade_out_ms > 0
+
+    def has_transition(self) -> bool:
+        return self.transition_in != TRANSITION_NONE and XFADE_TRANSITIONS.get(self.transition_in, "") != ""
+
+    def xfade_name(self) -> str:
+        return XFADE_TRANSITIONS.get(self.transition_in, "fade")
 
 
 def build_atempo_chain(speed: float) -> str:

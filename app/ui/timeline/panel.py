@@ -15,6 +15,28 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 
 from app.core.timeline import TRACK_AUDIO, TRACK_SUBTITLE, TRACK_VIDEO, TimelineModel
+from app.ui.app_theme import (
+    ACCENT,
+    ACCENT_BRIGHT,
+    ACCENT_TEAL,
+    BG_HOVER,
+    BG_PRESSED,
+    BORDER,
+    COLOR_DANGER,
+    COLOR_ICON_DEFAULT,
+    COLOR_SUCCESS,
+    COLOR_TRANSPORT,
+    COLOR_WARNING,
+    TEXT_MUTED,
+    TEXT_ON_ACCENT,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    TL_BG,
+    TL_BG_MINI,
+    TL_HEADER,
+    TL_STATUS,
+    TL_TOOLBAR,
+)
 from app.ui.timeline.clips import ClipWidget, TrackWidget
 from app.ui.timeline.nav import (
     MiniTimeline,
@@ -29,12 +51,14 @@ class TimelinePanel(QWidget):
 
     split_requested   = Signal()
     delete_requested  = Signal()
+    merge_requested   = Signal()
     add_media_requested = Signal()
     undo_requested    = Signal()
     redo_requested    = Signal()
     edit_mode_changed = Signal(str)
     playhead_changed  = Signal(int)
     clip_selected     = Signal(str, bool)
+    track_selected    = Signal(str, bool)
     clip_moved        = Signal(str, int)
     clip_drag_started = Signal(str)
     clip_trim_started = Signal(str)
@@ -47,11 +71,11 @@ class TimelinePanel(QWidget):
         super().__init__(parent)
         self.setObjectName("timelinePanel")
         self.setStyleSheet(
-            "#timelinePanel {"
-            "  background-color: #0F1520;"
-            "  border-radius: 0px;"
-            "  border: none;"
-            "}"
+            f"#timelinePanel {{"
+            f"  background-color: {TL_BG};"
+            f"  border-radius: 0px;"
+            f"  border: none;"
+            f"}}"
         )
         self.model = model
         self.zoom_level   = 1.0
@@ -70,8 +94,8 @@ class TimelinePanel(QWidget):
         toolbar_widget = QWidget()
         toolbar_widget.setFixedHeight(40)
         toolbar_widget.setStyleSheet(
-            "background: #111827;"
-            "border-bottom: 1px solid #1E2840;"
+            f"background: {TL_TOOLBAR};"
+            f"border-bottom: 1px solid {BORDER};"
         )
         toolbar = QHBoxLayout(toolbar_widget)
         toolbar.setContentsMargins(8, 4, 8, 4)
@@ -81,51 +105,52 @@ class TimelinePanel(QWidget):
             btn = QPushButton(qta.icon(icon, color=color), f" {text}")
             btn.setStyleSheet(f"""
               QPushButton {{
-                background-color: transparent; color: #CBD5E1;
+                background-color: transparent; color: {TEXT_SECONDARY};
                 border: none; padding: 3px 8px;
                 border-radius: 4px; font-weight: 600; font-size: 11px;
               }}
-              QPushButton:hover {{ background-color: #1E2A3A; color: #FFF; }}
-              QPushButton:pressed {{ background-color: #253145; }}
+              QPushButton:hover {{ background-color: {BG_HOVER}; color: {TEXT_PRIMARY}; }}
+              QPushButton:pressed {{ background-color: {BG_PRESSED}; }}
             """)
             btn.clicked.connect(callback)
             return btn
 
-        toolbar.addWidget(make_btn("fa5s.plus",  "Ekle",    "#22C55E", self.add_media_requested.emit))
-        toolbar.addWidget(make_btn("fa5s.cut",   "Böl",     "#EF4444", self.split_requested.emit))
-        toolbar.addWidget(make_btn("fa5s.trash", "Sil",     "#9CA3AF", self.delete_requested.emit))
+        toolbar.addWidget(make_btn("fa5s.plus",  "Ekle",    COLOR_SUCCESS, self.add_media_requested.emit))
+        toolbar.addWidget(make_btn("fa5s.cut",   "Böl",     COLOR_DANGER, self.split_requested.emit))
+        toolbar.addWidget(make_btn("fa5s.object-group", "Birleştir", COLOR_TRANSPORT, self.merge_requested.emit))
+        toolbar.addWidget(make_btn("fa5s.trash", "Sil",     COLOR_ICON_DEFAULT, self.delete_requested.emit))
 
         sep = QFrame(); sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #252F42;")
+        sep.setStyleSheet(f"color: {BORDER};")
         toolbar.addWidget(sep)
 
-        self.btn_undo = make_btn("fa5s.undo", "Geri Al", "#94A3B8", self.undo_requested.emit)
-        self.btn_redo = make_btn("fa5s.redo", "Yinele",  "#94A3B8", self.redo_requested.emit)
+        self.btn_undo = make_btn("fa5s.undo", "Geri Al", COLOR_TRANSPORT, self.undo_requested.emit)
+        self.btn_redo = make_btn("fa5s.redo", "Yinele",  COLOR_TRANSPORT, self.redo_requested.emit)
         toolbar.addWidget(self.btn_undo)
         toolbar.addWidget(self.btn_redo)
 
         sep2 = QFrame(); sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("color: #252F42;")
+        sep2.setStyleSheet(f"color: {BORDER};")
         toolbar.addWidget(sep2)
 
         self.btn_ripple = QPushButton(" Ripple")
         self.btn_slip   = QPushButton(" Slip")
         for mode_btn, mode, color in (
-            (self.btn_ripple, "ripple", "#2DD4BF"),
-            (self.btn_slip,   "slip",   "#F59E0B"),
+            (self.btn_ripple, "ripple", ACCENT_TEAL),
+            (self.btn_slip,   "slip",   COLOR_WARNING),
         ):
             mode_btn.setCheckable(True)
             mode_btn.setStyleSheet(f"""
               QPushButton {{
-                background-color: transparent; color: #64748B;
-                border: 1px solid #252F42; padding: 3px 10px;
+                background-color: transparent; color: {TEXT_MUTED};
+                border: 1px solid {BORDER}; padding: 3px 10px;
                 border-radius: 4px; font-weight: 600; font-size: 11px;
               }}
               QPushButton:checked {{
-                background-color: #1E2A3A; color: {color};
+                background-color: {BG_HOVER}; color: {color};
                 border-color: {color};
               }}
-              QPushButton:hover {{ background-color: #1E2A3A; color: #CBD5E1; }}
+              QPushButton:hover {{ background-color: {BG_HOVER}; color: {TEXT_PRIMARY}; }}
             """)
         self.btn_ripple.setChecked(True)
         self.btn_ripple.clicked.connect(lambda: self._set_edit_mode("ripple"))
@@ -133,7 +158,7 @@ class TimelinePanel(QWidget):
         toolbar.addWidget(self.btn_ripple)
         toolbar.addWidget(self.btn_slip)
 
-        toolbar.addWidget(make_btn("fa5s.magic", "Efektler", "#8B5CF6", self.effects_requested.emit))
+        toolbar.addWidget(make_btn("fa5s.magic", "Efektler", "#5A4A8A", self.effects_requested.emit))
 
         toolbar.addStretch(1)
 
@@ -144,13 +169,13 @@ class TimelinePanel(QWidget):
         toolbar.addSpacing(12)
 
         # Zoom controls
-        zoom_out_btn = QPushButton(qta.icon("fa5s.search-minus", color="#94A3B8"), "")
-        zoom_in_btn  = QPushButton(qta.icon("fa5s.search-plus",  color="#94A3B8"), "")
+        zoom_out_btn = QPushButton(qta.icon("fa5s.search-minus", color=COLOR_TRANSPORT), "")
+        zoom_in_btn  = QPushButton(qta.icon("fa5s.search-plus",  color=COLOR_TRANSPORT), "")
         for zb in (zoom_out_btn, zoom_in_btn):
             zb.setFixedSize(26, 26)
             zb.setStyleSheet(
-                "QPushButton { background: transparent; border: none; border-radius: 4px; }"
-                "QPushButton:hover { background: #1E2A3A; }"
+                f"QPushButton {{ background: transparent; border: none; border-radius: 4px; }}"
+                f"QPushButton:hover {{ background: {BG_HOVER}; }}"
             )
         zoom_out_btn.clicked.connect(lambda: self._apply_zoom(self.zoom_level / 1.3))
         zoom_in_btn.clicked.connect( lambda: self._apply_zoom(self.zoom_level * 1.3))
@@ -162,10 +187,10 @@ class TimelinePanel(QWidget):
         self.zoom_slider.setValue(100)
         self.zoom_slider.setFixedWidth(90)
         self.zoom_slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 3px; background: #2A3548; border-radius: 2px; }"
-            "QSlider::handle:horizontal { background: #3B82F6; width: 10px; height: 10px;"
-            "  margin: -4px 0; border-radius: 5px; }"
-            "QSlider::sub-page:horizontal { background: #3B82F6; border-radius: 2px; }"
+            f"QSlider::groove:horizontal {{ height: 3px; background: {BG_PRESSED}; border-radius: 2px; }}"
+            f"QSlider::handle:horizontal {{ background: {ACCENT}; width: 10px; height: 10px;"
+            f"  margin: -4px 0; border-radius: 5px; }}"
+            f"QSlider::sub-page:horizontal {{ background: {ACCENT_BRIGHT}; border-radius: 2px; }}"
         )
         self.zoom_slider.valueChanged.connect(lambda v: self._apply_zoom(v / 100.0))
 
@@ -184,7 +209,7 @@ class TimelinePanel(QWidget):
         # Left: track headers column
         self._headers_col = QWidget()
         self._headers_col.setFixedWidth(TrackHeader.HEADER_WIDTH)
-        self._headers_col.setStyleSheet("background: #131922;")
+        self._headers_col.setStyleSheet(f"background: {TL_HEADER};")
         headers_layout = QVBoxLayout(self._headers_col)
         headers_layout.setContentsMargins(0, 0, 0, 0)
         headers_layout.setSpacing(0)
@@ -192,12 +217,13 @@ class TimelinePanel(QWidget):
         # Ruler spacer
         ruler_spacer = QWidget()
         ruler_spacer.setFixedHeight(TimeRuler.HEIGHT)
-        ruler_spacer.setStyleSheet("background: #131922; border-bottom: 1px solid #1E2840;")
+        ruler_spacer.setStyleSheet(f"background: {TL_HEADER}; border-bottom: 1px solid {BORDER};")
         headers_layout.addWidget(ruler_spacer)
 
         self._track_headers: list[TrackHeader] = []
         for ttype in (TRACK_VIDEO, TRACK_AUDIO, TRACK_SUBTITLE):
             hdr = TrackHeader(ttype, TrackWidget.TRACK_HEIGHTS[ttype])
+            hdr.track_clicked.connect(self._on_track_header_clicked)
             self._track_headers.append(hdr)
             headers_layout.addWidget(hdr)
 
@@ -259,7 +285,7 @@ class TimelinePanel(QWidget):
 
         mini_spacer = QWidget()
         mini_spacer.setFixedWidth(TrackHeader.HEADER_WIDTH)
-        mini_spacer.setStyleSheet("background: #0C1220; border-top: 1px solid #1E2840;")
+        mini_spacer.setStyleSheet(f"background: {TL_BG_MINI}; border-top: 1px solid {BORDER};")
         mini_row_layout.addWidget(mini_spacer)
 
         self.mini_timeline = MiniTimeline()
@@ -272,20 +298,20 @@ class TimelinePanel(QWidget):
         status_bar = QWidget()
         status_bar.setFixedHeight(22)
         status_bar.setStyleSheet(
-            "background: #0D1117;"
-            "border-top: 1px solid #1E2840;"
+            f"background: {TL_STATUS};"
+            f"border-top: 1px solid {BORDER};"
         )
         status_layout = QHBoxLayout(status_bar)
         status_layout.setContentsMargins(8, 0, 8, 0)
 
         self.project_length_label = QLabel("Proje uzunluğu: 00:00")
-        self.project_length_label.setStyleSheet("color: #475569; font-size: 10px;")
+        self.project_length_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
         status_layout.addWidget(self.project_length_label)
         status_layout.addStretch(1)
 
         # Zoom percentage label
         self.zoom_label = QLabel("Zoom: 100%")
-        self.zoom_label.setStyleSheet("color: #3B4A6B; font-size: 10px;")
+        self.zoom_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
         status_layout.addWidget(self.zoom_label)
 
         layout.addWidget(status_bar)
@@ -423,6 +449,9 @@ class TimelinePanel(QWidget):
         self._trim_origin.pop(clip_id, None)
         self.clip_trim_finished.emit(clip_id)
 
+    def _on_track_header_clicked(self, track_type: str, additive: bool) -> None:
+        self.track_selected.emit(track_type, additive)
+
     def _connect_clip_widget(self, widget: ClipWidget) -> None:
         if widget.clip.clip_id in self._connected_widgets:
             return
@@ -438,7 +467,7 @@ class TimelinePanel(QWidget):
     def playhead_max_ms(self) -> int:
         return self._effective_duration_ms()
 
-    def set_playhead(self, ms: int, emit: bool = True) -> None:
+    def set_playhead(self, ms: int, emit: bool = True, *, lightweight: bool = False) -> None:
         max_ms = self.playhead_max_ms()
         self._playhead_ms = max(0, min(max_ms, ms)) if max_ms > 0 else max(0, ms)
         self.timecode_label.set_ms(self._playhead_ms)
@@ -446,7 +475,11 @@ class TimelinePanel(QWidget):
         self.container.set_playhead(
             self._playhead_ms, self._px_per_ms, self._effective_duration_ms()
         )
-        self._update_mini_timeline()
+        if not lightweight:
+            self._update_mini_timeline()
+        elif abs(ms - getattr(self, "_last_mini_sync_ms", -999)) >= 120:
+            self._last_mini_sync_ms = ms
+            self._update_mini_timeline()
         if emit:
             self.playhead_changed.emit(self._playhead_ms)
 

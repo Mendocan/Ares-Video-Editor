@@ -17,10 +17,28 @@ class ExportCompleteSound(QObject):
         super().__init__(parent)
         self._effect = QSoundEffect(self)
         self._effect.setVolume(0.42)
+        self._pending_play = False
+        self._effect.statusChanged.connect(self._on_status_changed)
+        path = export_complete_sound_path()
+        if path.exists():
+            self._effect.setSource(QUrl.fromLocalFile(str(path.resolve())))
 
     def play(self) -> None:
-        path = export_complete_sound_path()
-        if not path.exists():
+        if not export_complete_sound_path().exists():
             return
-        self._effect.setSource(QUrl.fromLocalFile(str(path.resolve())))
+        if not self._effect.source().isValid():
+            return
+        if self._effect.status() == QSoundEffect.Status.Ready:
+            if self._effect.isPlaying():
+                self._effect.stop()
+            self._effect.play()
+            return
+        self._pending_play = True
+
+    def _on_status_changed(self) -> None:
+        if self._effect.status() != QSoundEffect.Status.Ready or not self._pending_play:
+            return
+        self._pending_play = False
+        if self._effect.isPlaying():
+            self._effect.stop()
         self._effect.play()

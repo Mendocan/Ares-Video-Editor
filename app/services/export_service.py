@@ -9,7 +9,12 @@ import threading
 
 from app.core.clip_effects import ClipEffects, build_segment_filter
 from app.core.font_resolver import prepare_export_fonts
-from app.core.ffmpeg_paths import ensure_ffmpeg_on_path, ffmpeg_missing_message, is_nvenc_available
+from app.core.ffmpeg_paths import (
+    ensure_ffmpeg_on_path,
+    ffmpeg_missing_message,
+    is_nvenc_available,
+    resolve_ffprobe,
+)
 from app.core.media_probe import probe_duration_ms
 from app.core.subtitle_positions import ass_style_values
 from app.core.subtitle_style import (
@@ -64,6 +69,7 @@ class ExportRequest:
     video_crf: int = 23
     video_preset: str = "fast"
     video_segments: list[tuple[str, int, int, ClipEffects]] = field(default_factory=list)
+    audio_overlays: list[tuple[str, int, int, int]] = field(default_factory=list)
     preview_height_px: int = 0
 
 
@@ -117,21 +123,32 @@ class ExportService:
                 self._notify(
                     progress_callback,
                     pct,
-                    f"Video segmenti hazirlaniyor ({i + 1}/{len(segments)})...",
+                    f"Video segmenti hazırlanıyor ({i + 1}/{len(segments)})...",
                 )
             part = temp_dir / f"part_{i:03d}.mp4"
             self._cut_segment(path, start_ms, end_ms, part, effects)
             part_paths.append(str(part))
 
-        with list_file.open("w", encoding="utf-8") as handle:
-            for part in part_paths:
-                handle.write(f"file '{Path(part).as_posix()}'\n")
-
         merged = work_dir / "timeline_merged.mp4"
-        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(merged)]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "Timeline segmentleri birlestirilemedi.")
+        transitions_requested = any(
+            effects.has_transition() for _, _, _, effects in segments[1:]
+        )
+
+        if transitions_requested:
+            pairs = [
+                (effects.xfade_name(), effects.transition_duration_ms)
+                for _, _, _, effects in segments[1:]
+            ]
+            self._concat_with_transitions(part_paths, pairs, merged, progress_callback)
+        else:
+            with list_file.open("w", encoding="utf-8") as handle:
+                for part in part_paths:
+                    handle.write(f"file '{Path(part).as_posix()}'\n")
+
+            cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(merged)]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "Timeline segmentleri birlestirilemedi.")
 
         if is_preview:
             preview_src = work_dir / "preview_source.mp4"
@@ -148,6 +165,167 @@ class ExportService:
             return str(merged), True
 
         return str(merged), True
+
+    def _probe_resolution(self, path: str) -> tuple[int, int]:
+        ffprobe = resolve_ffprobe()
+        if not ffprobe:
+            return (0, 0)
+        cmd = [
+            ffprobe, "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=s=x:p=0", path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return (0, 0)
+        try:
+            w_str, h_str = result.stdout.strip().split("x")
+            width, height = int(w_str), int(h_str)
+            return (width - width % 2, height - height % 2)
+        except ValueError:
+            return (0, 0)
+
+    def _has_audio_stream(self, path: str) -> bool:
+        ffprobe = resolve_ffprobe()
+        if not ffprobe:
+            return True
+        cmd = [
+            ffprobe, "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index", "-of", "csv=p=0", path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return result.returncode == 0 and result.stdout.strip() != ""
+
+    def _concat_with_transitions(
+        self,
+        part_paths: list[str],
+        transitions: list[tuple[str, int]],
+        merged: Path,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> None:
+        """FFmpeg'in yerlesik `xfade`/`acrossfade` filtreleriyle klipleri gecis
+        efektleriyle birlestirir. `transitions[i]` = (xfade_adi, sure_ms), part[i+1]
+        klibine girerken uygulanacak gecisi tanimlar."""
+        self._notify(progress_callback, 10, "Geçiş efektleri hazırlanıyor...")
+
+        durations_ms = [max(1, probe_duration_ms(p)) for p in part_paths]
+        base_w, base_h = self._probe_resolution(part_paths[0])
+        if base_w <= 0 or base_h <= 0:
+            base_w, base_h = 1920, 1080
+        has_audio = [self._has_audio_stream(p) for p in part_paths]
+
+        inputs: list[str] = []
+        for part in part_paths:
+            inputs.extend(["-i", part])
+
+        def norm_video(index: int, label: str) -> str:
+            return (
+                f"[{index}:v]scale={base_w}:{base_h}:force_original_aspect_ratio=decrease,"
+                f"pad={base_w}:{base_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+                f"format=yuv420p[{label}]"
+            )
+
+        def norm_audio(index: int, label: str) -> str:
+            if has_audio[index]:
+                return (
+                    f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                    f"asetpts=PTS-STARTPTS[{label}]"
+                )
+            duration_sec = durations_ms[index] / 1000.0
+            return (
+                f"anullsrc=r=48000:cl=stereo:d={duration_sec:.3f},"
+                f"asetpts=PTS-STARTPTS[{label}]"
+            )
+
+        filter_chunks: list[str] = [norm_video(0, "v0n"), norm_audio(0, "a0n")]
+        prev_v, prev_a = "v0n", "a0n"
+        cumulative_sec = durations_ms[0] / 1000.0
+
+        for i in range(1, len(part_paths)):
+            xfade_name, duration_ms = transitions[i - 1]
+            v_label, a_label = f"v{i}n", f"a{i}n"
+            filter_chunks.append(norm_video(i, v_label))
+            filter_chunks.append(norm_audio(i, a_label))
+
+            next_dur_sec = durations_ms[i] / 1000.0
+            max_dur_sec = max(0.1, min(cumulative_sec, next_dur_sec) - 0.05)
+            dur_sec = max(0.1, min(duration_ms / 1000.0, max_dur_sec))
+            offset_sec = max(0.0, cumulative_sec - dur_sec)
+
+            out_v, out_a = f"vx{i}", f"ax{i}"
+            filter_chunks.append(
+                f"[{prev_v}][{v_label}]xfade=transition={xfade_name}:"
+                f"duration={dur_sec:.3f}:offset={offset_sec:.3f}[{out_v}]"
+            )
+            filter_chunks.append(f"[{prev_a}][{a_label}]acrossfade=d={dur_sec:.3f}[{out_a}]")
+
+            cumulative_sec = offset_sec + next_dur_sec
+            prev_v, prev_a = out_v, out_a
+
+        filter_complex = ";".join(filter_chunks)
+        cmd = [
+            "ffmpeg", "-y", *inputs,
+            "-filter_complex", filter_complex,
+            "-map", f"[{prev_v}]", "-map", f"[{prev_a}]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-c:a", "aac",
+            str(merged),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Gecis efektleriyle birlestirme basarisiz oldu.")
+
+    def _mix_audio_overlays(
+        self,
+        video_input: str,
+        overlays: list[tuple[str, int, int, int]],
+        work_dir: Path,
+    ) -> str:
+        """Timeline'daki bagimsiz ses efekti kliplerini (ruzgar, motor, patlama vb.)
+        ana video'nun ses izine, dogru zaman konumunda karistirir."""
+        mixed = work_dir / "timeline_audio_mixed.mp4"
+        inputs = ["-i", video_input]
+        for src, _start_ms, _end_ms, _at_ms in overlays:
+            inputs.extend(["-i", src])
+
+        filter_parts: list[str] = []
+        mix_labels: list[str] = []
+
+        if self._has_audio_stream(video_input):
+            filter_parts.append("[0:a]aformat=sample_rates=48000:channel_layouts=stereo[base_a]")
+        else:
+            base_duration_sec = max(0.1, probe_duration_ms(video_input) / 1000.0)
+            filter_parts.append(f"anullsrc=r=48000:cl=stereo:d={base_duration_sec:.3f}[base_a]")
+        mix_labels.append("[base_a]")
+
+        for idx, (_src, start_ms, end_ms, at_ms) in enumerate(overlays, start=1):
+            duration_sec = max(0.05, (end_ms - start_ms) / 1000.0)
+            start_sec = max(0.0, start_ms / 1000.0)
+            delay_ms = max(0, at_ms)
+            label = f"ov{idx}"
+            filter_parts.append(
+                f"[{idx}:a]atrim=start={start_sec:.3f}:duration={duration_sec:.3f},"
+                f"asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,"
+                f"adelay={delay_ms}|{delay_ms}[{label}]"
+            )
+            mix_labels.append(f"[{label}]")
+
+        filter_parts.append(
+            f"{''.join(mix_labels)}amix=inputs={len(mix_labels)}:duration=first:normalize=0[aout]"
+        )
+        filter_complex = ";".join(filter_parts)
+
+        cmd = [
+            "ffmpeg", "-y", *inputs,
+            "-filter_complex", filter_complex,
+            "-map", "0:v", "-map", "[aout]",
+            "-c:v", "copy", "-c:a", "aac",
+            str(mixed),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Ek ses efektleri karistirilamadi.")
+        return str(mixed)
 
     def _cut_segment(
         self,
@@ -292,7 +470,7 @@ class ExportService:
         ass_path: Path | None = None
         fonts_dir: Path | None = None
         if subtitles:
-            self._notify(progress_callback, 2, "Altyazi dosyasi hazirlaniyor...")
+            self._notify(progress_callback, 2, "Altyazı dosyası hazırlanıyor...")
             subtitles = ensure_subtitle_words(subtitles)
             fonts_dir, ass_font_name = prepare_export_fonts(request.font_name, work_dir)
             ass_path = output_path.with_suffix(".ass")
@@ -301,12 +479,15 @@ class ExportService:
                 encoding="utf-8-sig",
             )
         else:
-            self._notify(progress_callback, 2, "Video hazirlaniyor...")
+            self._notify(progress_callback, 2, "Video hazırlanıyor...")
 
-        self._notify(progress_callback, 8, "Video segmentleri hazirlaniyor...")
+        self._notify(progress_callback, 8, "Video segmentleri hazırlanıyor...")
         video_input, _ = self._prepare_video_source(
             request, work_dir, progress_callback=progress_callback
         )
+        if request.audio_overlays:
+            self._notify(progress_callback, 11, "Ek ses efektleri karıştırılıyor...")
+            video_input = self._mix_audio_overlays(video_input, request.audio_overlays, work_dir)
         request = self._resolve_gpu_request(request, progress_callback)
         ffmpeg_cwd = Path(ass_path.parent) if ass_path is not None else work_dir
         command = self._build_ffmpeg_command(
@@ -324,7 +505,7 @@ class ExportService:
             request,
         )
 
-        self._notify(progress_callback, 12, "FFmpeg disa aktarimi basliyor...")
+        self._notify(progress_callback, 12, "FFmpeg dışa aktarımı başlıyor...")
         self._run_ffmpeg_with_gpu_fallback(
             request,
             command,
@@ -336,7 +517,7 @@ class ExportService:
             resolved_duration_ms,
             fonts_dir,
         )
-        self._notify(progress_callback, 100, "Tamamlandi")
+        self._notify(progress_callback, 100, "Tamamlandı")
         return output_path
 
     def _resolve_gpu_request(
@@ -351,7 +532,7 @@ class ExportService:
         self._notify(
             progress_callback,
             10,
-            "NVIDIA GPU kullanilamiyor; CPU kodlayici (libx264) ile devam ediliyor...",
+            "NVIDIA GPU kullanılamıyor; CPU kodlayıcı (libx264) ile devam ediliyor...",
         )
         return replace(request, use_gpu=False)
 
@@ -381,7 +562,7 @@ class ExportService:
             self._notify(
                 progress_callback,
                 12,
-                "GPU hatasi algilandi; CPU kodlayici ile tekrar deneniyor...",
+                "GPU hatası algılandı; CPU kodlayıcı ile tekrar deneniyor...",
             )
             cpu_request = replace(request, use_gpu=False)
             cpu_command = self._build_ffmpeg_command(
@@ -526,9 +707,9 @@ class ExportService:
                         current_ms = self._current_output_ms(line)
                         if current_ms is not None:
                             current_label = self._format_progress_time(current_ms)
-                            message = f"Video disa aktariliyor... {current_label} / {total_label}"
+                            message = f"Video dışa aktarılıyor... {current_label} / {total_label}"
                         else:
-                            message = "Video disa aktariliyor..."
+                            message = "Video dışa aktarılıyor..."
                         self._notify(progress_callback, progress_state["last_percent"], message)
                         continue
 
@@ -536,10 +717,10 @@ class ExportService:
                         self._notify(
                             progress_callback,
                             12,
-                            f"Video isleniyor... 00:00 / {total_label}",
+                            f"Video işleniyor... 00:00 / {total_label}",
                         )
                     elif line == "progress=end":
-                        self._notify(progress_callback, 98, "Dosya yaziliyor...")
+                        self._notify(progress_callback, 98, "Dosya yazılıyor...")
             except Exception:
                 pass
 
@@ -551,6 +732,9 @@ class ExportService:
         code = process.wait()
         stdout_thread.join(timeout=60)
         stderr_thread.join(timeout=60)
+
+        if code == 0:
+            self._notify(progress_callback, 100, "Tamamlandı")
 
         stderr = "".join(stderr_chunks)
         if code != 0:
@@ -605,18 +789,13 @@ class ExportService:
         ass_font_name: str | None = None,
     ) -> str:
         border_style = "3" if request.bg_box else "1"
-        back_color = "&H80000000" if request.bg_box else "&H64000000"
+        back_color = "&H00000000" if request.bg_box else "&HFF000000"
         font_name = ass_font_name or request.font_name
-        use_karaoke = any(subtitle.words for subtitle in subtitles)
+        use_word_highlight = any(subtitle.words for subtitle in subtitles)
         normal_colour = self._hex_to_ass_color(request.normal_color)
         active_colour = self._hex_to_ass_color(request.active_color)
-        if use_karaoke:
-            # \\k: kelime basinda anlik renk degisimi (\\kf duz/sweep dolgu yapar)
-            primary_colour = active_colour
-            secondary_colour = normal_colour
-        else:
-            primary_colour = normal_colour
-            secondary_colour = "&H000000FF"
+        primary_colour = normal_colour
+        secondary_colour = normal_colour
 
         play_x, play_y = play_resolution(request.aspect_ratio)
         font_size, stroke_size, shadow_size = export_style_from_preview(
@@ -651,9 +830,9 @@ class ExportService:
         ]
 
         for subtitle in subtitles:
-            if use_karaoke and subtitle.words:
-                text = self._build_karaoke_text(subtitle)
-                effect = "karaoke"
+            if use_word_highlight and subtitle.words:
+                text = self._build_word_highlight_text(subtitle, normal_colour, active_colour)
+                effect = ""
             else:
                 text = self._escape_ass_text(subtitle.text)
                 effect = ""
@@ -666,28 +845,41 @@ class ExportService:
 
         return "\n".join(lines) + "\n"
 
-    def _build_karaoke_text(self, subtitle: TimedSubtitle) -> str:
-        """Onizlemedeki kelime vurgusu ile ayni zamanlama: \\k etiketleri."""
+    def _build_word_highlight_text(
+        self,
+        subtitle: TimedSubtitle,
+        normal_colour: str,
+        active_colour: str,
+    ) -> str:
+        """Yalnizca konusulan kelime aktif renkte; kelimeler arasi renk tasmasi yok."""
         words = subtitle.words
         if not words:
             return self._escape_ass_text(subtitle.text)
 
         line_start = subtitle.start_ms
         parts: list[str] = []
-
-        lead_ms = words[0].start_ms - line_start
-        if lead_ms > 0:
-            parts.append(f"{{\\k{max(1, lead_ms // 10)}}}")
-
         for index, word in enumerate(words):
-            if index + 1 < len(words):
-                duration_ms = words[index + 1].start_ms - word.start_ms
-            else:
-                duration_ms = max(subtitle.end_ms - word.start_ms, word.end_ms - word.start_ms)
-            duration_cs = max(1, duration_ms // 10)
-            parts.append(f"{{\\k{duration_cs}}}{self._escape_ass_text(word.text)}")
+            rel_start = max(0, word.start_ms - line_start)
+            rel_end = max(rel_start + 1, word.end_ms - line_start)
+            escaped = self._escape_ass_text(word.text)
+            spacer = " " if index > 0 else ""
 
-        return " ".join(parts)
+            # libass'ta \\t(0,0) bazen satir basinda tetiklenmez; ilk kelimeye dogrudan aktif renk
+            if rel_start <= 0:
+                open_tags = f"{{\\1c{active_colour}}}"
+            else:
+                open_tags = (
+                    f"{{\\1c{normal_colour}}}"
+                    f"{{\\t({rel_start},{rel_start},\\1c{active_colour})}}"
+                )
+
+            parts.append(
+                f"{spacer}{open_tags}"
+                f"{{\\t({rel_end},{rel_end},\\1c{normal_colour})}}"
+                f"{escaped}"
+                f"{{\\1c{normal_colour}}}"
+            )
+        return "".join(parts)
 
     def _hex_to_ass_color(self, value: str) -> str:
         cleaned = value.lstrip("#")

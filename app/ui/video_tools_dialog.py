@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from app.ui.app_theme import COLOR_DANGER, TEXT_MUTED, TEXT_ON_ACCENT
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
     QApplication,
@@ -78,7 +79,9 @@ class VideoToolsDialog(QDialog):
         layout.addWidget(group)
 
         self.auto_cut_btn = QPushButton("Sessizlikleri Temizle ve Kaydet")
-        self.auto_cut_btn.setStyleSheet("background-color: #EF4444; color: white; font-weight: bold;")
+        self.auto_cut_btn.setStyleSheet(
+            f"background-color: {COLOR_DANGER}; color: {TEXT_ON_ACCENT}; font-weight: bold;"
+        )
         self.auto_cut_btn.clicked.connect(self._run_auto_cut)
         layout.addWidget(self.auto_cut_btn)
         layout.addStretch()

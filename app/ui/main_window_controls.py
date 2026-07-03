@@ -33,6 +33,37 @@ from app.core.ffmpeg_paths import is_nvenc_available
 from app.core.style_presets import CUSTOM_PRESET_NAME, default_aspect_ratio_options, get_preset, preset_names
 from app.core.subtitle_positions import position_names
 from app.core.video_presets import is_vertical_format
+from app.ui.app_theme import (
+    ACCENT_HOVER,
+    ACCENT_TEAL,
+    BG_DROP_ZONE,
+    BG_DROP_ZONE_HOVER,
+    BG_HOVER,
+    BG_INPUT,
+    BG_PANEL,
+    BG_SIDEBAR,
+    BG_STACK,
+    BORDER,
+    BORDER_DASHED,
+    BTN_MP4_GRADIENT,
+    BTN_MP4_HOVER,
+    BTN_PREVIEW_GRADIENT,
+    BTN_PREVIEW_HOVER,
+    BTN_PRIMARY_GRADIENT,
+    BTN_PRIMARY_HOVER,
+    BTN_SRT_GRADIENT,
+    BTN_SRT_HOVER,
+    COLOR_DANGER,
+    COLOR_ICON_ACTIVE,
+    COLOR_ICON_DEFAULT,
+    COLOR_INFO,
+    COLOR_SUCCESS,
+    COLOR_WARNING,
+    TEXT_MUTED,
+    TEXT_ON_ACCENT,
+    TEXT_PRIMARY,
+    action_button_qss,
+)
 
 
 class MainWindowControlsMixin:
@@ -40,10 +71,10 @@ class MainWindowControlsMixin:
         panel = QFrame()
         panel.setObjectName("controlsPanel")
         panel.setStyleSheet(
-            "QFrame#controlsPanel {"
-            "  background-color: #151C28;"
-            "  border-right: 1px solid #0F172A;"
-            "}"
+            f"QFrame#controlsPanel {{"
+            f"  background-color: {BG_PANEL};"
+            f"  border-right: 1px solid {BORDER};"
+            f"}}"
         )
 
         layout = QHBoxLayout(panel)
@@ -51,11 +82,11 @@ class MainWindowControlsMixin:
         layout.setSpacing(0)
 
         self._sidebar_icon_specs = [
-            ("fa5s.plus", "Medya & Dosya"),
-            ("fa5s.cog", "Video Ayarlari"),
-            ("fa5s.image", "Logo Ayarlari"),
-            ("fa5s.font", "Altyazi Stili"),
-            ("fa5s.bolt", "Islemler"),
+            ("fa5s.plus", "Medya & Dosya", COLOR_SUCCESS),
+            ("fa5s.cog", "Video Ayarlari", COLOR_INFO),
+            ("fa5s.image", "Logo Ayarlari", COLOR_WARNING),
+            ("fa5s.font", "Altyazi Stili", "#5A4A8A"),
+            ("fa5s.bolt", "Islemler", ACCENT_TEAL),
         ]
 
         # Sidebar — Movavi tarzi: sade ikonlar, sol cizgi ile secim
@@ -71,62 +102,62 @@ class MainWindowControlsMixin:
         sidebar_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.transparent)
         sidebar_palette.setColor(QPalette.ColorRole.Window, Qt.GlobalColor.transparent)
         sidebar_palette.setColor(QPalette.ColorRole.Highlight, Qt.GlobalColor.transparent)
-        sidebar_palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#2DD4BF"))
+        sidebar_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(ACCENT_TEAL))
         self.sidebar.setPalette(sidebar_palette)
-        self.sidebar.setStyleSheet("""
-            QListWidget {
-                background-color: #121820;
+        self.sidebar.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {BG_SIDEBAR};
                 border: none;
-                border-right: 1px dashed #2D3748;
+                border-right: 2px solid {ACCENT_TEAL};
                 outline: 0;
                 padding: 12px 0px;
-            }
-            QListWidget::item {
+            }}
+            QListWidget::item {{
                 height: 44px;
                 padding: 0px;
                 margin: 2px 0px;
                 background: transparent;
                 border: none;
                 border-left: 3px solid transparent;
-            }
+            }}
             QListWidget::item:selected,
             QListWidget::item:selected:active,
             QListWidget::item:selected:!active,
             QListWidget::item:hover,
-            QListWidget::item:focus {
+            QListWidget::item:focus {{
                 background: transparent;
                 outline: none;
-            }
-            QListWidget::item:selected {
-                border-left: 3px solid #2DD4BF;
-            }
+            }}
+            QListWidget::item:selected {{
+                border-left: 3px solid {ACCENT_TEAL};
+            }}
         """)
 
         self.stacked_widget = QStackedWidget()
-        self.stacked_widget.setStyleSheet("""
-            QStackedWidget { background-color: #1A2233; }
-            QGroupBox {
+        self.stacked_widget.setStyleSheet(f"""
+            QStackedWidget {{ background-color: {BG_STACK}; }}
+            QGroupBox {{
                 background-color: transparent;
                 border: none;
                 margin-top: 6px;
                 padding-top: 8px;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 padding: 0px;
                 left: 0px;
                 top: 0px;
-                color: #E2E8F0;
+                color: {TEXT_PRIMARY};
                 font-weight: bold;
                 font-size: 13px;
                 background: transparent;
-            }
+            }}
         """)
 
-        def add_page(icon_name: str, tooltip: str, widget: QWidget) -> None:
+        def add_page(icon_name: str, tooltip: str, icon_color: str, widget: QWidget) -> None:
             item = QListWidgetItem()
-            item.setIcon(qta.icon(icon_name, color="#8B95A8"))
+            item.setIcon(qta.icon(icon_name, color=icon_color))
             item.setToolTip(tooltip)
             item.setTextAlignment(Qt.AlignCenter)
             self.sidebar.addItem(item)
@@ -149,11 +180,11 @@ class MainWindowControlsMixin:
             scroll.setWidget(container)
             self.stacked_widget.addWidget(scroll)
 
-        add_page("fa5s.plus", "Medya & Dosya", self._build_file_group())
-        add_page("fa5s.cog", "Video Ayarlari", self._build_video_settings_group())
-        add_page("fa5s.image", "Logo Ayarlari", self._build_logo_group())
-        add_page("fa5s.font", "Altyazi Stili", self._build_style_group())
-        add_page("fa5s.bolt", "Islemler", self._build_action_group())
+        add_page("fa5s.plus", "Medya & Dosya", COLOR_SUCCESS, self._build_file_group())
+        add_page("fa5s.cog", "Video Ayarlari", COLOR_INFO, self._build_video_settings_group())
+        add_page("fa5s.image", "Logo Ayarlari", COLOR_WARNING, self._build_logo_group())
+        add_page("fa5s.font", "Altyazi Stili", "#5A4A8A", self._build_style_group())
+        add_page("fa5s.bolt", "Islemler", ACCENT_TEAL, self._build_action_group())
 
         self.sidebar.currentRowChanged.connect(self._on_sidebar_row_changed)
         self.sidebar.setCurrentRow(0)
@@ -171,8 +202,8 @@ class MainWindowControlsMixin:
         self.stacked_widget.setCurrentIndex(row)
 
     def _update_sidebar_icons(self, selected_row: int) -> None:
-        for index, (icon_name, _tooltip) in enumerate(self._sidebar_icon_specs):
-            color = "#2DD4BF" if index == selected_row else "#8B95A8"
+        for index, (icon_name, _tooltip, icon_color) in enumerate(self._sidebar_icon_specs):
+            color = icon_color if index == selected_row else COLOR_ICON_DEFAULT
             item = self.sidebar.item(index)
             if item is not None:
                 item.setIcon(qta.icon(icon_name, color=color))
@@ -227,15 +258,15 @@ class MainWindowControlsMixin:
         self.import_drop_zone.setMinimumHeight(150)
         self.import_drop_zone.setCursor(Qt.PointingHandCursor)
         self.import_drop_zone.setStyleSheet(
-            "QFrame#importDropZone {"
-            "  background-color: #1A2233;"
-            "  border: 1px dashed #3D4D66;"
-            "  border-radius: 8px;"
-            "}"
-            "QFrame#importDropZone:hover {"
-            "  border-color: #2DD4BF;"
-            "  background-color: #1E2A3D;"
-            "}"
+            f"QFrame#importDropZone {{"
+            f"  background-color: {BG_DROP_ZONE};"
+            f"  border: 1px dashed {BORDER_DASHED};"
+            f"  border-radius: 8px;"
+            f"}}"
+            f"QFrame#importDropZone:hover {{"
+            f"  border-color: {ACCENT_TEAL};"
+            f"  background-color: {BG_DROP_ZONE_HOVER};"
+            f"}}"
         )
         drop_layout = QVBoxLayout(self.import_drop_zone)
         drop_layout.setContentsMargins(20, 24, 20, 24)
@@ -244,22 +275,22 @@ class MainWindowControlsMixin:
         drop_hint = QLabel("Dosyalari veya klasorleri buraya surukleyin")
         drop_hint.setAlignment(Qt.AlignCenter)
         drop_hint.setWordWrap(True)
-        drop_hint.setStyleSheet("color: #94A3B8; font-size: 12px; background: transparent; border: none;")
+        drop_hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; background: transparent; border: none;")
         drop_layout.addWidget(drop_hint)
 
         self.btn_add_files = QPushButton("Dosyalari ekle")
         self.btn_add_files.setCursor(Qt.PointingHandCursor)
         self.btn_add_files.setStyleSheet(
-            "QPushButton {"
-            "  background-color: #3B82F6;"
-            "  color: #FFFFFF;"
-            "  border: none;"
-            "  border-radius: 6px;"
-            "  padding: 10px 24px;"
-            "  font-weight: bold;"
-            "  font-size: 12px;"
-            "}"
-            "QPushButton:hover { background-color: #2563EB; }"
+            f"QPushButton {{"
+            f"  background: {BTN_PRIMARY_GRADIENT};"
+            f"  color: {TEXT_ON_ACCENT};"
+            f"  border: 1px solid {ACCENT_HOVER};"
+            f"  border-radius: 6px;"
+            f"  padding: 10px 24px;"
+            f"  font-weight: bold;"
+            f"  font-size: 12px;"
+            f"}}"
+            f"QPushButton:hover {{ background: {BTN_PRIMARY_HOVER}; }}"
         )
         self.btn_add_files.clicked.connect(self._pick_timeline_video)
         drop_layout.addWidget(self.btn_add_files, 0, Qt.AlignHCenter)
@@ -278,21 +309,21 @@ class MainWindowControlsMixin:
         self.video_input.setPlaceholderText("Timeline'daki video...")
         self.video_input.setReadOnly(True)
         self.video_input.setStyleSheet(
-            "QLineEdit { background-color: #121820; border: 1px solid #2D3748; font-size: 11px; }"
+            f"QLineEdit {{ background-color: {BG_INPUT}; border: 1px solid {BORDER}; font-size: 11px; }}"
         )
 
         video_row = QHBoxLayout()
         video_row.setSpacing(6)
         v_lbl = QLabel("Video")
-        v_lbl.setStyleSheet("color: #64748B; font-size: 11px; min-width: 48px;")
+        v_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; min-width: 48px;")
         video_row.addWidget(v_lbl)
         video_row.addWidget(self.video_input, 1)
 
-        self.btn_clear_video = QPushButton(qta.icon("fa5s.times", color="#EF4444"), "")
+        self.btn_clear_video = QPushButton(qta.icon("fa5s.times", color=COLOR_DANGER), "")
         self.btn_clear_video.setFixedSize(26, 26)
         self.btn_clear_video.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #475569; border-radius: 4px; padding: 2px; }"
-            "QPushButton:hover { background: rgba(239,68,68,0.15); border-color: #EF4444; }"
+            f"QPushButton {{ background: transparent; border: 1px solid {BORDER}; border-radius: 4px; padding: 2px; }}"
+            f"QPushButton:hover {{ background: rgba(181,58,58,0.12); border-color: {COLOR_DANGER}; }}"
         )
         self.btn_clear_video.clicked.connect(self._clear_video)
         video_row.addWidget(self.btn_clear_video)
@@ -303,22 +334,22 @@ class MainWindowControlsMixin:
         self.subtitle_input.setReadOnly(True)
         self.subtitle_input.setCursor(Qt.PointingHandCursor)
         self.subtitle_input.setStyleSheet(
-            "QLineEdit { background-color: #121820; border: 1px solid #2D3748; font-size: 11px; }"
+            f"QLineEdit {{ background-color: {BG_INPUT}; border: 1px solid {BORDER}; font-size: 11px; }}"
         )
         self.subtitle_input.mousePressEvent = self._subtitle_input_clicked
 
         subtitle_row = QHBoxLayout()
         subtitle_row.setSpacing(6)
         s_lbl = QLabel("Altyazi")
-        s_lbl.setStyleSheet("color: #64748B; font-size: 11px; min-width: 48px;")
+        s_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; min-width: 48px;")
         subtitle_row.addWidget(s_lbl)
         subtitle_row.addWidget(self.subtitle_input, 1)
 
-        self.btn_clear_subtitle = QPushButton(qta.icon("fa5s.times", color="#EF4444"), "")
+        self.btn_clear_subtitle = QPushButton(qta.icon("fa5s.times", color=COLOR_DANGER), "")
         self.btn_clear_subtitle.setFixedSize(26, 26)
         self.btn_clear_subtitle.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #475569; border-radius: 4px; padding: 2px; }"
-            "QPushButton:hover { background: rgba(239,68,68,0.15); border-color: #EF4444; }"
+            f"QPushButton {{ background: transparent; border: 1px solid {BORDER}; border-radius: 4px; padding: 2px; }}"
+            f"QPushButton:hover {{ background: rgba(181,58,58,0.12); border-color: {COLOR_DANGER}; }}"
         )
         self.btn_clear_subtitle.clicked.connect(self._clear_subtitle)
         subtitle_row.addWidget(self.btn_clear_subtitle)
@@ -379,7 +410,7 @@ class MainWindowControlsMixin:
 
         self.preset_desc_label = QLabel("")
         self.preset_desc_label.setWordWrap(True)
-        self.preset_desc_label.setStyleSheet("color: #94A3B8; font-weight: normal; font-size: 10px;")
+        self.preset_desc_label.setStyleSheet(f"color: {TEXT_MUTED}; font-weight: normal; font-size: 10px;")
         layout.addRow("", self.preset_desc_label)
 
         self.font_combo = QComboBox()
@@ -543,12 +574,14 @@ class MainWindowControlsMixin:
         layout = QVBoxLayout(group)
         
         self.video_tools_button = QPushButton("Video Araçları (Kes/Birleştir)")
-        self.video_tools_button.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8B5CF6, stop:1 #D946EF);")
+        self.video_tools_button.setStyleSheet(
+            f"background: {BTN_PRIMARY_GRADIENT}; color: {TEXT_ON_ACCENT};"
+        )
         self.video_tools_button.clicked.connect(self._open_video_tools)
 
         self.transcribe_button = QPushButton("Otomatik Altyazı Üret (Whisper)")
         self.transcribe_button.setStyleSheet(
-            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0EA5E9, stop:1 #2DD4BF);"
+            f"background: {BTN_PRIMARY_GRADIENT}; color: {TEXT_ON_ACCENT};"
         )
         self.transcribe_button.setEnabled(False)
         self.transcribe_button.clicked.connect(self._run_transcription)
@@ -557,20 +590,32 @@ class MainWindowControlsMixin:
             "Model, dil ve ceviri secenekleri ile kelime zamanlamali SRT uretir."
         )
         transcribe_hint.setWordWrap(True)
-        transcribe_hint.setStyleSheet("color: #64748B; font-size: 10px; font-weight: normal;")
+        transcribe_hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; font-weight: normal;")
 
         self.parse_button = QPushButton("SRT Ön Hazırlık")
+        self.parse_button.setStyleSheet(
+            action_button_qss(BTN_SRT_GRADIENT, BTN_SRT_HOVER, ACCENT_TEAL)
+        )
         self.parse_button.clicked.connect(self._parse_subtitle)
-        
+
         self.edit_button = QPushButton("Altyazı Düzenle")
+        self.edit_button.setStyleSheet(
+            action_button_qss(BTN_SRT_GRADIENT, BTN_SRT_HOVER, ACCENT_TEAL)
+        )
         self.edit_button.setEnabled(False)
         self.edit_button.clicked.connect(self._open_subtitle_editor)
 
         self.preview_export_button = QPushButton("Gerçek Önizleme (Kare)")
+        self.preview_export_button.setStyleSheet(
+            action_button_qss(BTN_PREVIEW_GRADIENT, BTN_PREVIEW_HOVER, COLOR_INFO)
+        )
         self.preview_export_button.setEnabled(False)
         self.preview_export_button.clicked.connect(self._show_real_preview)
 
         self.export_button = QPushButton("MP4 Dışa Aktar")
+        self.export_button.setStyleSheet(
+            action_button_qss(BTN_MP4_GRADIENT, BTN_MP4_HOVER, COLOR_SUCCESS)
+        )
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._prepare_export)
 
@@ -579,7 +624,7 @@ class MainWindowControlsMixin:
             "logolu ve altyazılı final görüntüyü oluşturur."
         )
         helper_text.setWordWrap(True)
-        helper_text.setStyleSheet("color: #94A3B8; font-weight: normal; font-size: 10px; margin-top: 8px;")
+        helper_text.setStyleSheet(f"color: {TEXT_MUTED}; font-weight: normal; font-size: 10px; margin-top: 8px;")
         helper_text.setAlignment(Qt.AlignTop)
 
         layout.addWidget(self.video_tools_button)
@@ -614,7 +659,7 @@ class MainWindowControlsMixin:
         button.setStyleSheet(
             "QPushButton {"
             f"background-color: {color.name()};"
-            "color: #0F172A;"
+            f"color: {TEXT_PRIMARY};"
             "font-weight: 600;"
             "padding: 8px 12px;"
             "border-radius: 8px;"
