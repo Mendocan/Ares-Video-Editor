@@ -364,6 +364,9 @@ class TimelineModel:
         local_x: int,
         px_per_ms: float,
         ripple: bool | None = None,
+        *,
+        playhead_ms: int | None = None,
+        snap_threshold_ms: int = 0,
     ) -> bool:
         """Klip kenarini kirpar. Ripple modda sol kenar sonrakileri kaydirir."""
         clip = self.get_clip(clip_id)
@@ -372,9 +375,18 @@ class TimelineModel:
 
         use_ripple = self.edit_mode == EDIT_MODE_RIPPLE if ripple is None else ripple
         delta_ms = int(local_x / px_per_ms)
+        candidates = (
+            self._collect_snap_candidates({clip_id}, playhead_ms)
+            if snap_threshold_ms > 0
+            else None
+        )
 
         if edge == "left":
             new_start = clip.timeline_start_ms + delta_ms
+            if candidates is not None:
+                new_start = self._snap_point(new_start, candidates, snap_threshold_ms)
+            prev_end = self._prev_clip_end(clip.track, clip_id, clip.timeline_start_ms)
+            new_start = max(new_start, prev_end)
             if new_start >= clip.timeline_end_ms - 100:
                 return False
             shift = new_start - clip.timeline_start_ms
@@ -390,6 +402,12 @@ class TimelineModel:
                         other.timeline_end_ms -= shift
         else:
             new_end = clip.timeline_start_ms + delta_ms
+            if candidates is not None:
+                new_end = self._snap_point(new_end, candidates, snap_threshold_ms)
+            if not use_ripple:
+                next_start = self._next_clip_start(clip.track, clip_id, clip.timeline_end_ms)
+                if next_start is not None:
+                    new_end = min(new_end, next_start)
             if new_end <= clip.timeline_start_ms + 100:
                 return False
             old_end = clip.timeline_end_ms
@@ -408,17 +426,110 @@ class TimelineModel:
         self._recalc_duration()
         return True
 
-    def move_clip(self, clip_id: str, new_start_ms: int) -> None:
+    def move_clip(
+        self,
+        clip_id: str,
+        new_start_ms: int,
+        *,
+        playhead_ms: int | None = None,
+        snap_threshold_ms: int = 0,
+    ) -> None:
         clip = self.get_clip(clip_id)
         if not clip:
             return
 
-        new_start_ms = max(0, new_start_ms)
         duration = clip.duration_ms
+        new_start_ms = max(0, new_start_ms)
+
+        if snap_threshold_ms > 0:
+            candidates = self._collect_snap_candidates({clip_id}, playhead_ms)
+            snapped_start = self._snap_point(new_start_ms, candidates, snap_threshold_ms)
+            snapped_end = self._snap_point(new_start_ms + duration, candidates, snap_threshold_ms)
+            if snapped_start != new_start_ms:
+                new_start_ms = snapped_start
+            elif snapped_end != new_start_ms + duration:
+                new_start_ms = snapped_end - duration
+            new_start_ms = max(0, new_start_ms)
+
+        new_start_ms = self._clamp_to_track_gap(clip.track, clip_id, new_start_ms, duration)
+
         clip.timeline_start_ms = new_start_ms
         clip.timeline_end_ms = new_start_ms + duration
 
         self._recalc_duration()
+
+    # ── Snapping / collision helpers ─────────────────────────────────────────
+
+    def _collect_snap_candidates(
+        self, exclude_ids: set[str], playhead_ms: int | None
+    ) -> list[int]:
+        points: set[int] = {0}
+        for c in self.clips:
+            if c.clip_id in exclude_ids:
+                continue
+            points.add(c.timeline_start_ms)
+            points.add(c.timeline_end_ms)
+        if playhead_ms is not None:
+            points.add(playhead_ms)
+        return sorted(points)
+
+    def _snap_point(self, value_ms: int, candidates: list[int], threshold_ms: int) -> int:
+        best = value_ms
+        best_dist = threshold_ms + 1
+        for c in candidates:
+            dist = abs(c - value_ms)
+            if dist < best_dist:
+                best_dist = dist
+                best = c
+        return best
+
+    def _prev_clip_end(self, track: str, clip_id: str, before_ms: int) -> int:
+        ends = [
+            c.timeline_end_ms
+            for c in self.clips
+            if c.track == track and c.clip_id != clip_id and c.timeline_end_ms <= before_ms
+        ]
+        return max(ends, default=0)
+
+    def _next_clip_start(self, track: str, clip_id: str, after_ms: int) -> int | None:
+        starts = [
+            c.timeline_start_ms
+            for c in self.clips
+            if c.track == track and c.clip_id != clip_id and c.timeline_start_ms >= after_ms
+        ]
+        return min(starts) if starts else None
+
+    def _clamp_to_track_gap(
+        self, track: str, clip_id: str, desired_start: int, duration: int
+    ) -> int:
+        """desired_start'i, ayni track'teki diger kliplerle cakismayacak sekilde kelepceler."""
+        desired_start = max(0, desired_start)
+        others = sorted(
+            (c for c in self.clips if c.track == track and c.clip_id != clip_id),
+            key=lambda c: c.timeline_start_ms,
+        )
+        if not others:
+            return desired_start
+
+        for _ in range(len(others) + 1):
+            desired_end = desired_start + duration
+            collided = None
+            for o in others:
+                if desired_start < o.timeline_end_ms and desired_end > o.timeline_start_ms:
+                    collided = o
+                    break
+            if collided is None:
+                return max(0, desired_start)
+
+            mid = (collided.timeline_start_ms + collided.timeline_end_ms) / 2
+            if desired_start + duration / 2 < mid:
+                desired_start = collided.timeline_start_ms - duration
+            else:
+                desired_start = collided.timeline_end_ms
+            if desired_start < 0:
+                desired_start = collided.timeline_end_ms
+
+        return max(0, desired_start)
 
     def video_segments_for_export(self) -> list[tuple[str, int, int, ClipEffects]]:
         """Export icin (kaynak, baslangic, bitis, efektler)."""

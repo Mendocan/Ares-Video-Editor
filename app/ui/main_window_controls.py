@@ -82,11 +82,11 @@ class MainWindowControlsMixin:
         layout.setSpacing(0)
 
         self._sidebar_icon_specs = [
-            ("fa5s.plus", "Medya & Dosya", COLOR_SUCCESS),
-            ("fa5s.cog", "Video Ayarlari", COLOR_INFO),
-            ("fa5s.image", "Logo Ayarlari", COLOR_WARNING),
-            ("fa5s.font", "Altyazi Stili", "#5A4A8A"),
-            ("fa5s.bolt", "Islemler", ACCENT_TEAL),
+            ("ph.plus-bold", "Medya & Dosya", COLOR_SUCCESS),
+            ("ph.gear-fill", "Video Ayarlari", COLOR_INFO),
+            ("ph.image-fill", "Logo Ayarlari", COLOR_WARNING),
+            ("ph.text-t-bold", "Altyazi Stili", "#5A4A8A"),
+            ("ph.lightning-fill", "Islemler", ACCENT_TEAL),
         ]
 
         # Sidebar — Movavi tarzi: sade ikonlar, sol cizgi ile secim
@@ -180,11 +180,11 @@ class MainWindowControlsMixin:
             scroll.setWidget(container)
             self.stacked_widget.addWidget(scroll)
 
-        add_page("fa5s.plus", "Medya & Dosya", COLOR_SUCCESS, self._build_file_group())
-        add_page("fa5s.cog", "Video Ayarlari", COLOR_INFO, self._build_video_settings_group())
-        add_page("fa5s.image", "Logo Ayarlari", COLOR_WARNING, self._build_logo_group())
-        add_page("fa5s.font", "Altyazi Stili", "#5A4A8A", self._build_style_group())
-        add_page("fa5s.bolt", "Islemler", ACCENT_TEAL, self._build_action_group())
+        add_page("ph.plus-bold", "Medya & Dosya", COLOR_SUCCESS, self._build_file_group())
+        add_page("ph.gear-fill", "Video Ayarlari", COLOR_INFO, self._build_video_settings_group())
+        add_page("ph.image-fill", "Logo Ayarlari", COLOR_WARNING, self._build_logo_group())
+        add_page("ph.text-t-bold", "Altyazi Stili", "#5A4A8A", self._build_style_group())
+        add_page("ph.lightning-fill", "Islemler", ACCENT_TEAL, self._build_action_group())
 
         self.sidebar.currentRowChanged.connect(self._on_sidebar_row_changed)
         self.sidebar.setCurrentRow(0)

@@ -3,7 +3,15 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+
+def _app_base_dir() -> Path:
+    """Kaynak kod veya PyInstaller portable klasoru."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
 
 
 def _candidate_bin_dirs() -> list[Path]:
@@ -13,8 +21,8 @@ def _candidate_bin_dirs() -> list[Path]:
     if env_bin:
         candidates.append(Path(env_bin))
 
-    project_tools = Path(__file__).resolve().parents[2] / "tools" / "ffmpeg" / "bin"
-    candidates.append(project_tools)
+    # Portable ZIP: exe yaninda tools/ffmpeg/bin
+    candidates.append(_app_base_dir() / "tools" / "ffmpeg" / "bin")
 
     local_appdata = os.environ.get("LOCALAPPDATA", "")
     if local_appdata:
@@ -82,9 +90,10 @@ def ffmpeg_missing_message() -> str:
     return (
         "FFmpeg/ffprobe bulunamadi.\n\n"
         "Cozum:\n"
-        "1) WinGet ile kurun: winget install Gyan.FFmpeg\n"
-        "2) Veya ARES_FFMPEG_BIN ortam degiskenine bin klasorunu yazin\n"
-        "3) Uygulamayi yeniden baslatin"
+        "1) Portable surumde tools\\ffmpeg\\bin klasorune ffmpeg.exe koyun\n"
+        "2) WinGet ile kurun: winget install Gyan.FFmpeg\n"
+        "3) Veya ARES_FFMPEG_BIN ortam degiskenine bin klasorunu yazin\n"
+        "4) Uygulamayi yeniden baslatin"
     )
 
 

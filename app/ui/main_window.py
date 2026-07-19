@@ -224,6 +224,16 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         QShortcut(QKeySequence.StandardKey.Save, self, self._save_project)
         QShortcut(QKeySequence.StandardKey.Open, self, self._open_project)
 
+        # Timeline / oynatma kısayolları
+        QShortcut(QKeySequence("Space"), self, self._toggle_preview_playback)
+        QShortcut(QKeySequence("Del"), self, self._delete_selected_clips)
+        QShortcut(QKeySequence("Backspace"), self, self._delete_selected_clips)
+        QShortcut(QKeySequence("S"), self, self._split_at_playhead)
+        QShortcut(QKeySequence("Left"), self, lambda: self._jump_time(-40))
+        QShortcut(QKeySequence("Right"), self, lambda: self._jump_time(40))
+        QShortcut(QKeySequence("Shift+Left"), self, lambda: self._jump_time(-5000))
+        QShortcut(QKeySequence("Shift+Right"), self, lambda: self._jump_time(5000))
+
     def _build_menu_bar(self) -> None:
         menubar = self.menuBar()
         menubar.setStyleSheet(
@@ -755,11 +765,19 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         return thumbs, waves
 
     def _on_clip_moved(self, clip_id: str, new_start_ms: int) -> None:
-        self.timeline_model.move_clip(clip_id, new_start_ms)
+        self.timeline_model.move_clip(
+            clip_id, new_start_ms,
+            playhead_ms=self.timeline_panel.playhead_ms,
+            snap_threshold_ms=self.timeline_panel.snap_threshold_ms,
+        )
         self.timeline_panel.refresh()
 
     def _on_clip_drag_finished(self, clip_id: str, new_start_ms: int) -> None:
-        self.timeline_model.move_clip(clip_id, new_start_ms)
+        self.timeline_model.move_clip(
+            clip_id, new_start_ms,
+            playhead_ms=self.timeline_panel.playhead_ms,
+            snap_threshold_ms=self.timeline_panel.snap_threshold_ms,
+        )
         self.timeline_panel.refresh()
         self._generate_thumbnails()
         self._commit_history()
@@ -1548,7 +1566,16 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
         self.export_button.setEnabled(True)
         self.btn_export_mini.setEnabled(True)
         self.statusBar().showMessage("Dışa aktarım tamamlandı.")
-        QTimer.singleShot(0, lambda: self._close_export_progress(progress))
+        if hasattr(self, "_export_worker_finish_timer"):
+            try:
+                self._export_worker_finish_timer.stop()
+                self._export_worker_finish_timer.deleteLater()
+            except RuntimeError:
+                pass
+        self._export_worker_finish_timer = QTimer(self)
+        self._export_worker_finish_timer.setSingleShot(True)
+        self._export_worker_finish_timer.timeout.connect(lambda: self._close_export_progress(progress))
+        self._export_worker_finish_timer.start(0)
 
     def _on_export_success(self, progress: ExportProgressDialog, exported_path) -> None:
         if not getattr(self, "_export_in_progress", False):
@@ -1575,7 +1602,16 @@ class MainWindow(QMainWindow, MainWindowControlsMixin, MainWindowPreviewMixin):
             except RuntimeError:
                 after_progress_closed()
                 return
-            QTimer.singleShot(250, lambda: self._close_export_progress(progress, after_progress_closed))
+            if hasattr(self, "_export_close_timer"):
+                try:
+                    self._export_close_timer.stop()
+                    self._export_close_timer.deleteLater()
+                except RuntimeError:
+                    pass
+            self._export_close_timer = QTimer(self)
+            self._export_close_timer.setSingleShot(True)
+            self._export_close_timer.timeout.connect(lambda: self._close_export_progress(progress, after_progress_closed))
+            self._export_close_timer.start(250)
         else:
             after_progress_closed()
 

@@ -49,6 +49,8 @@ from app.ui.timeline.ruler import TimeRuler, TimelineContainer
 class TimelinePanel(QWidget):
     """Timeline şeridi — profesyonel video editörü görünümü."""
 
+    SNAP_PX = 10
+
     split_requested   = Signal()
     delete_requested  = Signal()
     merge_requested   = Signal()
@@ -115,17 +117,17 @@ class TimelinePanel(QWidget):
             btn.clicked.connect(callback)
             return btn
 
-        toolbar.addWidget(make_btn("fa5s.plus",  "Ekle",    COLOR_SUCCESS, self.add_media_requested.emit))
-        toolbar.addWidget(make_btn("fa5s.cut",   "Böl",     COLOR_DANGER, self.split_requested.emit))
-        toolbar.addWidget(make_btn("fa5s.object-group", "Birleştir", COLOR_TRANSPORT, self.merge_requested.emit))
-        toolbar.addWidget(make_btn("fa5s.trash", "Sil",     COLOR_ICON_DEFAULT, self.delete_requested.emit))
+        toolbar.addWidget(make_btn("ph.plus-bold",  "Ekle",    COLOR_SUCCESS, self.add_media_requested.emit))
+        toolbar.addWidget(make_btn("ph.scissors-bold",   "Böl",     COLOR_DANGER, self.split_requested.emit))
+        toolbar.addWidget(make_btn("ph.intersect-bold", "Birleştir", COLOR_TRANSPORT, self.merge_requested.emit))
+        toolbar.addWidget(make_btn("ph.trash-bold", "Sil",     COLOR_ICON_DEFAULT, self.delete_requested.emit))
 
         sep = QFrame(); sep.setFrameShape(QFrame.VLine)
         sep.setStyleSheet(f"color: {BORDER};")
         toolbar.addWidget(sep)
 
-        self.btn_undo = make_btn("fa5s.undo", "Geri Al", COLOR_TRANSPORT, self.undo_requested.emit)
-        self.btn_redo = make_btn("fa5s.redo", "Yinele",  COLOR_TRANSPORT, self.redo_requested.emit)
+        self.btn_undo = make_btn("ph.arrow-u-up-left-bold", "Geri Al", COLOR_TRANSPORT, self.undo_requested.emit)
+        self.btn_redo = make_btn("ph.arrow-u-up-right-bold", "Yinele",  COLOR_TRANSPORT, self.redo_requested.emit)
         toolbar.addWidget(self.btn_undo)
         toolbar.addWidget(self.btn_redo)
 
@@ -158,7 +160,7 @@ class TimelinePanel(QWidget):
         toolbar.addWidget(self.btn_ripple)
         toolbar.addWidget(self.btn_slip)
 
-        toolbar.addWidget(make_btn("fa5s.magic", "Efektler", "#5A4A8A", self.effects_requested.emit))
+        toolbar.addWidget(make_btn("ph.magic-wand-bold", "Efektler", "#5A4A8A", self.effects_requested.emit))
 
         toolbar.addStretch(1)
 
@@ -169,8 +171,8 @@ class TimelinePanel(QWidget):
         toolbar.addSpacing(12)
 
         # Zoom controls
-        zoom_out_btn = QPushButton(qta.icon("fa5s.search-minus", color=COLOR_TRANSPORT), "")
-        zoom_in_btn  = QPushButton(qta.icon("fa5s.search-plus",  color=COLOR_TRANSPORT), "")
+        zoom_out_btn = QPushButton(qta.icon("ph.magnifying-glass-minus-bold", color=COLOR_TRANSPORT), "")
+        zoom_in_btn  = QPushButton(qta.icon("ph.magnifying-glass-plus-bold",  color=COLOR_TRANSPORT), "")
         for zb in (zoom_out_btn, zoom_in_btn):
             zb.setFixedSize(26, 26)
             zb.setStyleSheet(
@@ -464,6 +466,16 @@ class TimelinePanel(QWidget):
 
     # ── Playhead ───────────────────────────────────────────────────────────
 
+    @property
+    def playhead_ms(self) -> int:
+        return self._playhead_ms
+
+    @property
+    def snap_threshold_ms(self) -> int:
+        if self._px_per_ms <= 0:
+            return 0
+        return int(self.SNAP_PX / self._px_per_ms)
+
     def playhead_max_ms(self) -> int:
         return self._effective_duration_ms()
 
@@ -568,7 +580,11 @@ class TimelinePanel(QWidget):
         self.clip_moved.emit(clip_id, new_start_ms)
 
     def _handle_trim(self, clip_id: str, edge: str, local_x: int) -> None:
-        self.model.trim_clip(clip_id, edge, local_x, self._px_per_ms)
+        self.model.trim_clip(
+            clip_id, edge, local_x, self._px_per_ms,
+            playhead_ms=self._playhead_ms,
+            snap_threshold_ms=self.snap_threshold_ms,
+        )
         self.refresh()
 
     # ── Resize / Show ──────────────────────────────────────────────────────

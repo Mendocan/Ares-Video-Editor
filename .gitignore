@@ -14,6 +14,9 @@ dist/
 
 # Build / packaging
 build/
+dist/
+release/*.zip
+!release/README.md
 *.spec.bak
 
 # IDE
